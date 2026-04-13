@@ -1,5 +1,19 @@
+/** @file       <style.css>
+ *  @details    Tá tudo aq.
+ */
+
+@font-face {
+    font-family: 'MinhaFonte';
+    src: url("assets/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+    font-weight: normal;
+    font-style: normal;
+}
+
+
+
 body {
   font-family: Arial;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 h1 {
