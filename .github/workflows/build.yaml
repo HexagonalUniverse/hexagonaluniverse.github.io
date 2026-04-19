@@ -33,7 +33,7 @@ jobs:
               run: |    
                     $emsdk = "$env:USERPROFILE\dev\downloads\emsdk"
                             
-                    if (!(Test-Path $emsdkPath)) {
+                    if (!(Test-Path emsdk)) {
                         git clone https://github.com/emscripten-core/emsdk.git $emsdk
                     }
                   
