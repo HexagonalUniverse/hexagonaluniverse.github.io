@@ -20,7 +20,18 @@ jobs:
 
         steps:
             # clones the rep. into the runner s.t. the workflow can access the code.
-            - uses:   actions/checkout@v4
+            - uses:     actions/checkout@v4
+
+            - name:     Install EMSDK
+              shell:    pwsh
+              run: |    
+                    $emsdk = "$env:USERPROFILE\dev\downloads\emsdk"
+                            
+                    git clone https://github.com/emscripten-core/emsdk.git $emsdk
+                    cd $emsdk
+                  
+                    .\emsdk install latest
+                    .\emsdk activate latest
 
             - name:     Configure
               run:      src/hps/.configure.ps1
