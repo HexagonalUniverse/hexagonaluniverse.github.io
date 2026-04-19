@@ -37,4 +37,4 @@ jobs:
               run:      src/hps/.configure.ps1
 
             - name:     Build
-              run:      src/hps/.build.ps1s
+              run:      src/hps/.build.ps1
