@@ -1,0 +1,36 @@
+#  
+# Project's build CI
+#
+
+name: build
+
+
+on:
+    push:
+        branches: [ particles ]
+
+    pull_request:
+        branches: [ particles ]
+
+
+
+jobs:
+    build:
+        runs-on: windows-latest
+        
+
+    steps:
+
+    # clones the rep. into the runner s.t. the workflow can access the code.
+    - uses:   actions/checkout@v4
+    
+    - name:     Configure
+      run:      src/hps/.configure.ps1
+    
+    - name:     Build
+      run:      src/hps/.build.ps1s
+
+
+
+
+

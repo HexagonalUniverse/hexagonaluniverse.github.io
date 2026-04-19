@@ -7,7 +7,7 @@
 
 import { OrbitalParticle, Orbital } from "./particles.js";
 
-import createModule from "./tmnc.auto.js";
+import createModule from "./hps/out/tmnc.auto.js";
 const mod = await createModule();
 const nothing = mod.cwrap("nothing", null, ["number"]);
 nothing(1.6);

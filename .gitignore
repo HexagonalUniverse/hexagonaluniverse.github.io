@@ -9,6 +9,11 @@
 .idea
 
 
+# Build
+**/cmake-build/
+**/out/
+
+
 ### Binaries
 *.wasm
 *.out
@@ -18,5 +23,6 @@
 *.a
 *.so
 *.auto*
+
 
 
