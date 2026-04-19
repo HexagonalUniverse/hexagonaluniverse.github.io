@@ -1,0 +1,46 @@
+/** @file       <css/components.css>
+ *  @details    ...
+ */
+
+
+ .social-icon {
+    position:   relative;
+    display:    inline-block;
+
+    width:      32px;
+    height:     32px;
+}
+
+
+.social-icon img {
+    display:        inline-block;
+
+    width:          100%;
+    height:         100%;
+    object-fit:     contain;
+}
+
+
+.social-icon:hover .tooltip {
+    opacity:        1.0;
+}
+
+
+
+/*  só por ter... */
+.tooltip {
+    position:       absolute;
+    top:            100%;
+    left:           50%;
+    transform:      translateX(-50%) translateY(+10%);
+
+    background:   rgb(47, 47, 47);
+    color:        rgb(255, 255, 255);
+    padding:        4px 8px;
+    border-radius:  4px;
+
+    opacity:        0;
+    pointer-events: none;
+    transition:     0.2s;
+}   
+

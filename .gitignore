@@ -1,0 +1,22 @@
+#   <.gitignore>
+#
+#
+
+
+### IDEs
+.vs
+.vscode
+.idea
+
+
+### Binaries
+*.wasm
+*.out
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.auto*
+
+
