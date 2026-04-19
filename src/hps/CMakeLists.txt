@@ -45,6 +45,7 @@ target_link_options(THE-GREATEST-EXECUTABLE-THIS-WORLD-HAS-EVER-AND-WILL-EVER-SE
         "-sMODULARIZE=1"
         "-sEXPORT_ES6=1"
         "-sWASM=1"
+        "-sEXPORT_ALL=1"
         "-sEXPORTED_FUNCTIONS=_nothing"
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap"
 )

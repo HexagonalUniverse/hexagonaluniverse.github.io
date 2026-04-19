@@ -5,12 +5,9 @@
  */
 
 
-import { OrbitalParticle, Orbital } from "./particles.js";
+import { RadialParticle, Orbital } from "./hps/particles.js";
 
-import createModule from "./hps/out/tmnc.auto.js";
-const mod = await createModule();
-const nothing = mod.cwrap("nothing", null, ["number"]);
-nothing(1.6);
+
 
 
 /*
@@ -25,7 +22,9 @@ const rect = box.getBoundingClientRect();
 const cx = box.clientWidth * 0.5;
 const cy = box.clientHeight * 0.5;
 
+
 const system = new Orbital();
+
 
 for (let i = 0; i < 20; ++i) {
     //const el = document.createElement("div");
@@ -43,11 +42,11 @@ for (let i = 0; i < 20; ++i) {
     svg.appendChild(tri);
     box.appendChild(svg);
 
-
     //el.className = "dot";
     //box.appendChild(el);
-    system.add(new OrbitalParticle(
+    system.add(new RadialParticle(
         svg,
+        1.0,
         cx,
         cy,
         40 + i * 4,
