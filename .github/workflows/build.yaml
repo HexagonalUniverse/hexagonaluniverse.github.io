@@ -22,12 +22,21 @@ jobs:
             # clones the rep. into the runner s.t. the workflow can access the code.
             - uses:     actions/checkout@v4
 
+            - name:     Cache EMSDK
+              uses:     actions/cache@v4
+              with:
+                    path: ${{ env.USERPROFILE }}\dev\downloads\emsdk
+                    key: emsdk-${{ runner.os }}-latest
+
             - name:     Install EMSDK
               shell:    pwsh
               run: |    
                     $emsdk = "$env:USERPROFILE\dev\downloads\emsdk"
                             
-                    git clone https://github.com/emscripten-core/emsdk.git $emsdk
+                    if (!(Test-Path $emsdkPath)) {
+                        git clone https://github.com/emscripten-core/emsdk.git $emsdk
+                    }
+                  
                     cd $emsdk
                   
                     .\emsdk install latest
