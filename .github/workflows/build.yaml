@@ -13,6 +13,10 @@ on:
         branches: [ particles ]
 
 
+permissions:
+    contents:   read
+    pages:      write
+
 
 jobs:
     build:
@@ -47,3 +51,6 @@ jobs:
 
             - name:     Build
               run:      src/hps/.build.ps1
+
+            - name:     Copy to Pages
+              run:      src/hps/.copy.ps1
