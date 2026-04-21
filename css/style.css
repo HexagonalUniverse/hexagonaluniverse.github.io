@@ -169,19 +169,6 @@ button {
 }
 
 
-.dot {
-    position: absolute;
-
-    width:  6px;
-    height: 6px;
-}
-
-
-.box {
-    position: relative;
-    z-index: - 1;
-}
-
 
 
 

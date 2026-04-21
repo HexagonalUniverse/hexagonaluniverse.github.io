@@ -3,7 +3,7 @@
  */
 
 
- .social-icon {
+.social-icon {
     position:   relative;
     display:    inline-block;
 
@@ -26,7 +26,6 @@
 }
 
 
-
 /*  só por ter... */
 .tooltip {
     position:       absolute;
@@ -44,3 +43,31 @@
     transition:     0.2s;
 }   
 
+
+
+
+
+
+/*
+ *
+ *  Particles and etc...
+ *
+ */
+
+.small-triangle {
+    position: absolute;
+
+    width:  6px;
+    height: 6px;
+}
+
+
+.box {
+    position: relative;
+    z-index: - 1;
+}
+
+
+.box:hover {
+    opacity: 0%;
+}

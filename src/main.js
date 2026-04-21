@@ -5,7 +5,7 @@
  */
 
 
-import { RadialParticle, Orbital } from "./hps/particles.js";
+import { RadialParticle, Orbital, ParticleSystemManager, GParticle } from "./hps/particles.js";
 
 
 
@@ -26,36 +26,51 @@ const cy = box.clientHeight * 0.5;
 const system = new Orbital();
 
 
-for (let i = 0; i < 20; ++i) {
-    //const el = document.createElement("div");
-    
-    const ns = "http://www.w3.org/2000/svg";
 
-    const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 10 10");
-    svg.classList.add("dot");
 
-    const tri = document.createElementNS(ns, "polygon");
-    tri.setAttribute("points", "5,0 10,10 0,10");
-    tri.setAttribute("fill", "rgb(239, 202, 108)");
+class SvgTriangle {
+    constructor() {
+        const ns = "http://www.w3.org/2000/svg";
 
-    svg.appendChild(tri);
+        this.svg = document.createElementNS(ns, "svg");
+        this.svg.setAttribute("viewBox", "0 0 10 10");
+        this.svg.classList.add("small-triangle");
+
+        this.shape = document.createElementNS(ns, "polygon");
+        this.shape.setAttribute("points", "5,0 10,10 0,10");
+        this.shape.setAttribute("fill", "rgb(239, 202, 108)");
+
+        this.svg.appendChild(this.shape);
+    }
+}
+
+
+for (let i = 0; i < 6; ++i) {
+    const figure = new SvgTriangle();
+    const svg = figure.svg;
+
     box.appendChild(svg);
 
-    //el.className = "dot";
-    //box.appendChild(el);
     system.add(new RadialParticle(
         svg,
         1.0,
         cx,
         cy,
-        40 + i * 4,
-        i,
-        0.1
+        100,
+        6.28318530717958 / 6 * i,
+        0.25
     ));
 }
 
-system.start();
+//system.start();
 
+
+
+
+
+
+const psm = new ParticleSystemManager();
+await psm.create();
+psm.start();
 
 
