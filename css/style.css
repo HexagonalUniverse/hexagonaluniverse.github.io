@@ -149,7 +149,7 @@ button {
     animation:  animation-desc-bg 5s ease infinite alternate;
 }
 
-
+/* @todo text-shadow */
 @keyframes animation-desc-bg {
     0% {
         opacity: 0%;
@@ -229,7 +229,9 @@ button {
     right:          var(--gap);
     left:           var(--gap);
     width:          150px;
-    
+
+    display:        flex;
+    flex-direction: column;
 
     /*  Border */
     padding:        16px;
@@ -243,6 +245,9 @@ button {
 
     animation: animation-left-intro 1s linear 1;
 }
+
+
+
 
 
 @keyframes animation-left-intro {
