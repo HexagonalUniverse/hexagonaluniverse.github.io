@@ -1,0 +1,37 @@
+{
+    "emission-frequency":   5.0,
+
+    "lifespan":             10.0,
+
+    "size":                 [50.0, 20.0],
+    "spin":                 [0.0, 1.57],
+
+    "initial-color":        "#FA833450",
+    "target-color":         "#8E57DAFF",
+
+    "pos-space": {
+        "min-x": 0.0,
+        "max-x": 100.0,
+        "min-y": 0.0,
+        "max-y": 100.0
+    },
+
+    "vel-space": {
+        "min-x": -10.0,
+        "max-x": 10.0,
+        "min-y": -10.0,
+        "max-y": 10.0
+    },
+
+    "acc-space": {
+        "min-x": 0.0,
+        "max-x": 0.0,
+        "min-y": 0.0,
+        "max-y": 0.0
+    },
+
+    "range": {
+        "size": 50.0,
+        "spin": 1.0
+    }
+}

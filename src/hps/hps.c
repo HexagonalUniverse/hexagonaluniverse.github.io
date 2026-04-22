@@ -90,6 +90,8 @@ static v2 random_range2(v4 range2)
  *
  */
 
+#define MAX_PARTICLES   256
+
 static uint64_t GLOBAL_particle_id = 0;
 
 
@@ -191,6 +193,9 @@ typedef struct {
     v4      vel_space;  /**<    (x_min, y_min, x_max, y_max) */
     v4      acc_space;  /**<    (x_min, y_min, x_max, y_max) */
 
+    v4      fade;
+
+
 
     /*
      *  Particle control
@@ -199,7 +204,7 @@ typedef struct {
     uint64_t particle_count;
     uint64_t max_particles;
 
-    Particle particles[4];
+    Particle particles[MAX_PARTICLES];
 
 } ParticleSystem;
 
@@ -242,7 +247,7 @@ EXPORT void ps_destroy(ParticleSystem * const ps)
 
 EXPORT bool ps_emmit(ParticleSystem * const ps)
 {
-    if (ps->particle_count >= 4)
+    if (ps->particle_count >= MAX_PARTICLES)
         return false;
 
 
@@ -256,7 +261,8 @@ EXPORT bool ps_emmit(ParticleSystem * const ps)
 
     particle->time_alive    = 0.0f;
     particle->life_span     = random_range((v2) { ps->lifetime.x - ps->lifetime.y, ps->lifetime.x + ps->lifetime.y} );
-    particle->fade          = (v2) { 0.0f, 0.0f };
+    particle->fade          = (v2) { 0.2f, 0.2f };
+
 
     particle->from = (ParticleProperties) {
         .rgba = ps->initial_color,

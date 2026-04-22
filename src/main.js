@@ -5,7 +5,7 @@
  */
 
 
-import { RadialParticle, Orbital, ParticleSystemManager, GParticle } from "./hps/particles.js";
+import { RadialParticle, Orbital, ParticleSystemManager } from "./hps/particles.js";
 
 
 
@@ -16,7 +16,7 @@ import { RadialParticle, Orbital, ParticleSystemManager, GParticle } from "./hps
  * 
  */
 
-const box = document.querySelector(".box");
+const box = document.querySelector(".bg");
 const rect = box.getBoundingClientRect();
 
 const cx = box.clientWidth * 0.5;

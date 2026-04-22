@@ -80,11 +80,25 @@ fn integrate(particle: ptr<storage, Particle, read_write>, delta_time: f32)
 fn particle_interpolate(particle: ptr<storage, Particle, read_write>)
 {
     // @todo CLIP
-    let t : f32 = (* particle).time_alive / (* particle).lifespan;
+    let t : f32 = min(1.0, (* particle).time_alive / (* particle).lifespan);
 
-    (* particle).prop.rgba  = (* particle).from_.rgba + t * ((* particle).from_.rgba - (* particle).to_.rgba);
-    (* particle).prop.size  = (* particle).from_.size + t * ((* particle).from_.size - (* particle).to_.size);
-    (* particle).prop.spin  = (* particle).from_.spin + t * ((* particle).from_.spin - (* particle).to_.spin);
+    (* particle).prop.rgba  = (* particle).from_.rgba + t * ((* particle).to_.rgba - (* particle).from_.rgba);
+
+
+    /*  fade */
+    // u\left(x\right)=\max\left(0,\ \min\left(\frac{H\min\left(\frac{x-L_{a}}{\alpha},\ \frac{L_{b}-x}{\beta}\right)}{\left(L_{b}-L_{a}\right)},\ H\right)\right)
+    const H : f32           = 1.0;
+    let Lb : f32            = (* particle).lifespan;
+
+    let x: f32 = (* particle).time_alive;
+    let u2 : f32            = min(x / (* particle).fade.x, (Lb - x) / (* particle).fade.y);
+    let u1 : f32            = min(H, u2);
+    let u : f32             = max(0.0, u1);
+
+    (* particle).prop.rgba.w *= u;
+
+    (* particle).prop.size  = (* particle).from_.size + t * ((* particle).to_.size - (* particle).from_.size);
+    (* particle).prop.spin  = (* particle).from_.spin + t * ((* particle).to_.spin - (* particle).from_.spin);
 }
 
 

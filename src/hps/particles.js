@@ -151,15 +151,27 @@ export class Orbital {
 
 
 
+let WINDOW_HEIGHT = 0.0;
+let WINDOW_WIDTH = 0.0;
+
+
+function update_viewport_size()
+{
+    const rect = document.querySelector(".bg").getBoundingClientRect();
+    WINDOW_WIDTH  = rect.width;
+    WINDOW_HEIGHT = rect.height;
+}
+
 
 
 class SvgTriangle {
     constructor() {
-        const box = document.querySelector(".box");
+        const box = document.querySelector(".bg");
         const ns = "http://www.w3.org/2000/svg";
 
         this.svg = document.createElementNS(ns, "svg");
-        this.svg.setAttribute("viewBox", "0 0 10 10");
+        this.svg.setAttribute("viewBox", "0 0 100 100");
+        this.svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
         this.svg.classList.add("small-triangle");
 
         this.shape = document.createElementNS(ns, "polygon");
@@ -172,9 +184,12 @@ class SvgTriangle {
 }
 
 
-export class GParticle {
+/**
+ *  Renders a particle.
+ */
+export class GraphicalParticle {
     constructor(id, element) {
-        this.id = id;
+        this.id = id; // just for...
         this.element = element;
     }
 
@@ -184,21 +199,46 @@ export class GParticle {
         const x = this.view[0];
         const y = this.view[1];
 
-        //console.log(this.id, x, y);
-        //const orientation_angle = - Math.PI / 2 + Math.atan2(y - this.center_y, x - this.center_x);
-        const orientation_angle = 1;
+        const px = (x * WINDOW_WIDTH / 100.0);
+        const py = (y * WINDOW_HEIGHT / 100.0);
+
+        const vx = this.view[2];
+        const vy = this.view[3];
+
+        // 4, 5, 6, 7, 8, 9, 10, 11
+
+        const r = (this.view[12] * 255) | 0; // APPARENTLY, FLOAT -> INT IS FASTER VIA THIS PIPE OPERATION.
+        const g = (this.view[13] * 255) | 0;
+        const b = (this.view[14] * 255) | 0;
+        const a = this.view[15];
+
+        const size = this.view[16];
+        const spin = this.view[17];
+
+        const orientation_angle = + Math.PI / 2 + Math.atan2(vy, vx);
+
 
         // transforming.
-        this.element.svg.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%) rotate(${orientation_angle}rad)`;
+        this.element.svg.style.transform = `translate(${px}px, ${py}px) translate(-50%, -50%) rotate(${orientation_angle}rad) scale(${size})`;
+        this.element.shape.setAttribute("fill", `rgb(${r}, ${g}, ${b})`);
+        this.element.svg.setAttribute("fill-opacity", `${a}`);
+
     }
 }
+
+
+
+/*  Constants */
+const buffer_length         = 1024;
+const data_size             = 144;
+const buffer_size           = buffer_length * data_size;
+const ps_particle_offset    = 144;
 
 
 /**
  *  WEBGPU particle system scheduler.
  */
 class ParticleSystemScheduler {
-    /*  Constants */
     #buffer_length;
     #data_size;
     #buffer_size;
@@ -219,7 +259,7 @@ class ParticleSystemScheduler {
 
     constructor() {
         /*  Constants */
-        this.#buffer_length     = 4;
+        this.#buffer_length     = 1024;
         this.#data_size         = 144;
         this.#buffer_size       = this.#buffer_length *  this.#data_size;
     }
@@ -253,19 +293,10 @@ class ParticleSystemScheduler {
         });
 
 
-        /* 
-        const init_data = new Float32Array(this.#buffer_length * (this.#data_size / 4));
-        for (let i = 0; i < this.#buffer_length * (this.#buffer_size / 4); ++ i)
-            init_data[i] = i;
-        */
-        //const init_data = new Float32Array(this.#buffer_length * (this.#data_size / 4));
-        //this.#device.queue.writeBuffer(this.#gpu_main_buffer, 0, init_data);
-
 
         /*
          *  Loading the shader.
          */
-
 
         const shader_code = await fetch("src/hps/particles.wgsl").then(r => r.text());
         this.#shader = this.#device.createShaderModule({ code: shader_code });
@@ -337,8 +368,154 @@ class ParticleSystemScheduler {
 }
 
 
+function valid_number(number) {
+    return number !== undefined && typeof number === "number";
+}
+
+
+function valid_tuple(obj) {
+    return Array.isArray(obj) && obj.length === 2;
+}
+
+
+function parse_hex_to_f32(hex) {
+    if (typeof hex !== "string" || hex[0] !== "#" || hex.length !== 9)
+        return [1, 1, 1, 1];
+
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const a = parseInt(hex.slice(7, 9), 16);
+
+    if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
+        console.log("zebra");
+        return [1, 1, 1, 1];
+    }
+
+    return [r / 255, g / 255, b / 255, a / 255];
+}
+
+
+function parse_space_on_heap(heap, base, src) {
+    let min_x;
+    let min_y;
+    let max_x;
+    let max_y;
+
+
+    if (src && typeof src === "object")
+    {
+        if (typeof src["min-x"] === "number") min_x = src["min-x"];
+        if (typeof src["min-y"] === "number") min_y = src["min-y"];
+        if (typeof src["max-x"] === "number") max_x = src["max-x"];
+        if (typeof src["max-y"] === "number") max_y = src["max-y"];
+    }
+
+
+    // x
+    if (min_x === undefined && max_x === undefined)
+    {
+        min_x = 0.0;
+        max_x = 0.0;
+    }
+    else if (min_x === undefined)
+    {
+        min_x = max_x;
+    }
+    else if (max_x === undefined)
+    {
+        max_x = min_x;
+    }
+
+
+    // y
+    if (min_y === undefined && max_y === undefined)
+    {
+        min_y = 0.0;
+        max_y = 0.0;
+    }
+    else if (min_y === undefined)
+    {
+        min_y = max_y;
+    }
+    else if (max_y === undefined)
+    {
+        max_y = min_y;
+    }
+
+
+    heap[base + 0] = min_x;
+    heap[base + 1] = min_y;
+    heap[base + 2] = max_x;
+    heap[base + 3] = max_y;
+}
+
+
+
 
 export class ParticleSystemManager {
+
+    /**
+     *  Sets JSON configuration into the C-struct.
+     *  @param cfg  The JSON.
+     */
+    set(cfg) {
+        if (cfg === undefined)
+            return;
+
+        const offset = this.ps_ptr >> 2;
+
+
+        if (valid_number(cfg["emission-period"]))
+            mod.HEAPF32[offset + 0] = cfg["emission-period"];
+
+        else if (valid_number(cfg["emission-frequency"]))
+            mod.HEAPF32[offset + 0] = 1.0 / cfg["emission-frequency"];
+
+
+        if (valid_number(cfg["lifespan"]))
+            mod.HEAPF32[offset + 2] = cfg["lifespan"];
+
+
+        if (valid_number(cfg["size"]))
+            mod.HEAPF32[offset + 4] = 5.0;
+
+        else if (valid_tuple(cfg["size"])) {
+            mod.HEAPF32[offset + 4] = cfg["size"][0];
+            mod.HEAPF32[offset + 5] = cfg["size"][1];
+        }
+
+
+        if (valid_number(cfg["spin"]))
+            mod.HEAPF32[offset + 6] = 5.0;
+
+        else if (valid_tuple(cfg["spin"])) {
+            mod.HEAPF32[offset + 6] = cfg["spin"][0];
+            mod.HEAPF32[offset + 7] = cfg["spin"][1];
+        }
+
+
+        var color = parse_hex_to_f32(cfg["initial-color"]);
+        mod.HEAPF32[offset + 8]     = color[0];
+        mod.HEAPF32[offset + 9]     = color[1];
+        mod.HEAPF32[offset + 10]    = color[2];
+        mod.HEAPF32[offset + 11]    = color[3];
+
+
+        color = parse_hex_to_f32(cfg["target-color"]);
+        mod.HEAPF32[offset + 12]    = color[0];
+        mod.HEAPF32[offset + 13]    = color[1];
+        mod.HEAPF32[offset + 14]    = color[2];
+        mod.HEAPF32[offset + 15]    = color[3];
+
+
+        parse_space_on_heap(mod.HEAPF32, offset + 16, cfg["pos-space"]);
+        parse_space_on_heap(mod.HEAPF32, offset + 20, cfg["vel-space"]);
+        parse_space_on_heap(mod.HEAPF32, offset + 24, cfg["acc-space"]);
+    }
+
+
+
     constructor() {
         this.running = false;
         this._loop = this._loop.bind(this);
@@ -348,7 +525,7 @@ export class ParticleSystemManager {
         hps_init();
         this.ps_ptr = mod._ps_create();
         const offset = this.ps_ptr >> 2;
-        mod.HEAPF32[offset + 0] = 0.5;
+        mod.HEAPF32[offset + 0] = 0.1;
         mod.HEAPF32[offset + 1] = 0.0;
 
         // lifetime.
@@ -382,9 +559,12 @@ export class ParticleSystemManager {
         mod.HEAPF32[offset + 20] = 20.0; mod.HEAPF32[offset + 21] = 20.0;
         mod.HEAPF32[offset + 22] = 20.0; mod.HEAPF32[offset + 23] = 20.0;
 
+        mod.HEAPF32[offset + 24] = 20.0; mod.HEAPF32[offset + 25] = 20.0;
+        mod.HEAPF32[offset + 26] = 20.0; mod.HEAPF32[offset + 27] = 20.0;
+
         mod.HEAPF32[offset + 28] = 0.0;
 
-        this.particles_view = new Float32Array(mod.HEAPF32.buffer, this.ps_ptr + 128, 4 * (144 / 4));
+        this.particles_view = new Float32Array(mod.HEAPF32.buffer, this.ps_ptr + ps_particle_offset, buffer_length * (data_size / 4));
     }
 
 
@@ -392,11 +572,15 @@ export class ParticleSystemManager {
         this.pss = new ParticleSystemScheduler();
         await this.pss.create();
 
-        for (let i = 0; i < 4; ++ i) {
-            var gp = new GParticle(i, new SvgTriangle());
-            gp.view = new Float32Array(mod.HEAPF32.buffer, this.ps_ptr + 128 + 144 * i, 144 / 4);
+        for (let i = 0; i < buffer_length; ++ i) {
+            var gp = new GraphicalParticle(i, new SvgTriangle());
+            gp.view = new Float32Array(mod.HEAPF32.buffer, this.ps_ptr + ps_particle_offset + data_size * i, data_size / 4);
             this.gparticles.push(gp);
         }
+
+
+        const response = await fetch("src/bg-particle-effect.json");
+        this.set(await response.json());
     }
 
 
@@ -417,6 +601,8 @@ export class ParticleSystemManager {
     async _loop() {
         if (! this.running)
             return;
+
+        update_viewport_size();
 
 
         // dispatching...
