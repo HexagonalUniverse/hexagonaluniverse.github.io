@@ -42,12 +42,19 @@ struct Particle {
 }; // size: 144 [B]
 
 
+// @TODO uniform buffer
+// the problem in having a global memory common to the particles
+// is that we`ll loose the ability of having slight changes in them.
+// and tracking the diff. about as many wasteful.
 struct EmissionProperties {
     period          : f32,
     timer           : f32,
 
     lifetime        : f32,
     lifetime_range  : f32,
+
+    from            : ParticleProperties,
+    to              : ParticleProperties,
 };
 
 
@@ -76,7 +83,6 @@ fn integrate(particle: ptr<storage, Particle, read_write>, delta_time: f32)
 }
 
 
-// @TODO uniform buffer
 fn particle_interpolate(particle: ptr<storage, Particle, read_write>)
 {
     // @todo CLIP
@@ -87,22 +93,18 @@ fn particle_interpolate(particle: ptr<storage, Particle, read_write>)
 
     /*  fade */
     // u\left(x\right)=\max\left(0,\ \min\left(\frac{H\min\left(\frac{x-L_{a}}{\alpha},\ \frac{L_{b}-x}{\beta}\right)}{\left(L_{b}-L_{a}\right)},\ H\right)\right)
-    const H : f32           = 1.0;
-    let Lb : f32            = (* particle).lifespan;
-
     let x: f32 = (* particle).time_alive;
-    let u2 : f32            = min(x / (* particle).fade.x, (Lb - x) / (* particle).fade.y);
-    let u1 : f32            = min(H, u2);
+    let u2 : f32            = min(x / (* particle).fade.x, ((* particle).lifespan - x) / (* particle).fade.y);
+    let u1 : f32            = min(1.0, u2);
     let u : f32             = max(0.0, u1);
 
+    // multiplicative alpha-effect.
     (* particle).prop.rgba.w *= u;
+
 
     (* particle).prop.size  = (* particle).from_.size + t * ((* particle).to_.size - (* particle).from_.size);
     (* particle).prop.spin  = (* particle).from_.spin + t * ((* particle).to_.spin - (* particle).from_.spin);
 }
-
-
-
 
 
 /**
@@ -113,7 +115,6 @@ fn particle_update(@builtin(global_invocation_id) id: vec3<u32>)
 {
     // thread index.
     let particle_index = id.x;
-
 
     if (particle_index >= arrayLength(&particles)) {
         return;
@@ -127,14 +128,15 @@ fn particle_update(@builtin(global_invocation_id) id: vec3<u32>)
 
 
 
+// @TODO
 @compute @workgroup_size(256)
 fn ps_compact(@builtin(global_invocation_id) id: vec3<u32>)
 {
-
     // thread index.
     let particle_index = id.x;
 
-    const delta_time : f32 = 1.0 / 60.0; // @TODO
-    integrate(&particles[particle_index], delta_time);
+    if (particle_index >= arrayLength(&particles)) {
+        return;
+    }
 }
 

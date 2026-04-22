@@ -261,7 +261,10 @@ EXPORT bool ps_emmit(ParticleSystem * const ps)
 
     particle->time_alive    = 0.0f;
     particle->life_span     = random_range((v2) { ps->lifetime.x - ps->lifetime.y, ps->lifetime.x + ps->lifetime.y} );
-    particle->fade          = (v2) { 0.2f, 0.2f };
+    particle->fade          = (v2) {
+        random_range((v2) { ps->fade.x - ps->fade.z, ps->fade.x + ps->fade.z }),
+        random_range((v2) { ps->fade.y - ps->fade.w, ps->fade.y + ps->fade.w }),
+    };
 
 
     particle->from = (ParticleProperties) {

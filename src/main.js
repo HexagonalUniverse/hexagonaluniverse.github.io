@@ -45,24 +45,26 @@ class SvgTriangle {
 }
 
 
-for (let i = 0; i < 6; ++i) {
-    const figure = new SvgTriangle();
-    const svg = figure.svg;
+if (0) {
+    for (let i = 0; i < 6; ++i) {
+        const figure = new SvgTriangle();
+        const svg = figure.svg;
+    
+        box.appendChild(svg);
+    
+        system.add(new RadialParticle(
+            svg,
+            1.0,
+            cx,
+            cy,
+            100,
+            6.28318530717958 / 6 * i,
+            0.25
+        ));
+    }
 
-    box.appendChild(svg);
-
-    system.add(new RadialParticle(
-        svg,
-        1.0,
-        cx,
-        cy,
-        100,
-        6.28318530717958 / 6 * i,
-        0.25
-    ));
+    //system.start();
 }
-
-//system.start();
 
 
 

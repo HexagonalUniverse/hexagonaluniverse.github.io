@@ -1,26 +1,29 @@
 {
     "emission-frequency":   5.0,
 
-    "lifespan":             10.0,
+    "lifespan":             32.0,
 
     "size":                 [50.0, 20.0],
     "spin":                 [0.0, 1.57],
 
-    "initial-color":        "#FA833450",
+    "fade-in":              4.00,
+    "fade-out":             4.00,
+
+    "initial-color":        "#FA8334FF",
     "target-color":         "#8E57DAFF",
 
     "pos-space": {
-        "min-x": 0.0,
-        "max-x": 100.0,
-        "min-y": 0.0,
-        "max-y": 100.0
+        "min-x": 15.0,
+        "max-x": 85.0,
+        "min-y": 15.0,
+        "max-y": 85.0
     },
 
     "vel-space": {
-        "min-x": -10.0,
-        "max-x": 10.0,
-        "min-y": -10.0,
-        "max-y": 10.0
+        "min-x": -5.0,
+        "max-x": 5.0,
+        "min-y": -5.0,
+        "max-y": 5.0
     },
 
     "acc-space": {

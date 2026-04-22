@@ -55,7 +55,8 @@
  */
 
 .small-triangle {
-    position: absolute;
+    position:       absolute;
+    pointer-events: none;
 
     width:  6px;
     height: 6px;

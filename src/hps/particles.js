@@ -495,6 +495,13 @@ export class ParticleSystemManager {
         }
 
 
+        if (valid_number(cfg["fade-in"]))
+            mod.HEAPF32[offset + 28] = cfg["fade-in"];
+
+        if (valid_number(cfg["fade-out"]))
+            mod.HEAPF32[offset + 29] = cfg["fade-out"];
+
+
         var color = parse_hex_to_f32(cfg["initial-color"]);
         mod.HEAPF32[offset + 8]     = color[0];
         mod.HEAPF32[offset + 9]     = color[1];
@@ -622,6 +629,10 @@ export class ParticleSystemManager {
             const gparticle = this.gparticles[i];
 
             gparticle.render();
+        }
+
+        for (let i = size; i < buffer_length; ++ i) {
+            this.gparticles[i].element.svg.setAttribute("fill-opacity", `0`);
         }
 
 
