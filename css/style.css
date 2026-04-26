@@ -2,34 +2,10 @@
  *  @details    Tá (quase) tudo aq.
  */
 
-
 /*
  *
- *  Loading assets
- *
- */
-
-@font-face {
-    font-family: "JetBrains Mono";
-    src: url("../assets/fonts/JetBrainsMono-Regular.woff2") format("woff2");
-    font-weight:    400; /* normal */
-    font-style:     normal;
-    font-display:   swap;
-}
-
-
-@font-face {
-    font-family: "JetBrains Mono";
-    src: url("../assets/fonts/JetBrainsMono-Bold.woff2") format("woff2");
-    font-weight:    700; /* bold */
-    font-style:     normal;
-    font-display:   swap;
-}
-
-
-
-/*
  *  Variables
+ *
  */
 
 :root {
@@ -44,11 +20,11 @@
     --color-primary:    #4affa4;
     --color-secondary:  #FA8334;
     --color-black:      #0C120C;
-    
+
     --color-1:          #FCC29C;
     --color-2:          #EE6C4D;
     --color-3:          #4affa4;
-    
+
     --color-icon-1:     #B9FAF8;
     --color-icon-2:     #D561B3;
     --color-icon-3:     #8E57DA;
@@ -69,17 +45,17 @@
  */
 
 body {
-    /*  
-     *  Background
+    /*
+     *  Background #0b0b2c
      */
 
-    background-color:       #121529;
+    background:             linear-gradient(to bottom, #121529FF, #151E3AFF);
     background-image:       url("../assets/img/HU BG.png");
     background-size:        cover;
     background-repeat:      no-repeat;
     background-attachment:  fixed;
 
-    font-family:            "JetBrains Mono", monospace;
+    font-family:            "Barlow", monospace;
     margin:                 0px;
 }
 
@@ -104,13 +80,23 @@ button {
 }
 
 
+a {
+    color: inherit;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+
 
 /*
  *
  *  Elements
- *  
+ *
  */
- 
+
 .layout {
     display:    flex;   /* flex layout lays children horizontally... */
     min-height: 100vh;  /* ensures all of it can be viewed on vertical. */
@@ -122,42 +108,6 @@ button {
     display:            flex;
     justify-content:    center;
     align-items:        center;
-}
-
-
-.description {
-    /* Text */
-    position:       relative;
-    padding:        12px 12px;
-    text-align:     center;
-    font-size:      16px;
-    color:          var(--color-text);
-    z-index:        0;
-}
-
-
-.description::before {
-    content:    "";
-    position:   absolute;
-    inset:      0;
-
-    /* Background */
-    border-radius:      var(--roundness);
-    background:         radial-gradient(ellipse, var(--color-secondary), transparent 60%);
-    z-index: - 1;
-
-    animation:  animation-desc-bg 5s ease infinite alternate;
-}
-
-/* @todo text-shadow */
-@keyframes animation-desc-bg {
-    0% {
-        opacity: 0%;
-    }
-
-    100% {
-        opacity: 25%;
-    }
 }
 
 
@@ -273,23 +223,23 @@ button {
  */
 
 .main-panel {
-    /*  Layout */ 
+    /*  Layout */
     position:   fixed;
-    top:        var(--gap);    
+    top:        var(--gap);
     bottom:     var(--gap);
     left:       calc(var(--gap) * 2 + var(--sidebar-width));
     right:      var(--gap);
 
 
-    /*  Border */ 
+    /*  Border */
     padding:        16px;
     border:         2px solid transparent;
     border-radius:  var(--roundness);
     /* box-shadow:     0px 0px 4px var(--color-primary); */
 
 
-    /*  Animations */  
-    animation:  animation-main-panel-blur 4s linear infinite,
+    /*  Animations */
+    animation:  animation-main-panel-blur 20s linear infinite,
                 animation-main-panel-intro 1s linear 1;
     overflow:   hidden;
 }
@@ -380,7 +330,7 @@ button {
         opacity:    0%;
     }
 
-    100% { 
+    100% {
         transform: translate(-100vw, 100%);
         opacity:    0%;
     }
@@ -389,20 +339,78 @@ button {
 
 
 .title {
-    font-weight:    bold;
+    font-family:    "Cinzel Decorative";
     font-size:      36px;
+    font-weight:    400;
+    text-shadow:    0px 0px 5px var(--color-secondary);
 
     margin-bottom:  8px;
-    color:          var(--color-primary);
+    color:          var(--color-secondary);
 }
 
 
 .subtitle {
+    font-family:    "Cinzel";
     font-size:      16px;
+    font-weight:    100;
+    text-shadow:    0px 0px 5px var(--color-secondary);
+
     text-align:     right;
-    font-weight:    bold;
     margin-bottom:  8px;
 
-    color:          var(--color-primary);
+    color:          var(--color-secondary);
 }
 
+
+.description {
+    font-family:    "Cinzel";
+    font-size:      16px;
+    font-weight:    100;
+
+
+    /* Text */
+    position:       relative;
+    padding:        24px 12px;
+    text-align:     center;
+    color:          var(--color-text);
+    z-index:        0;
+
+    animation:  animation-desc-text 5s ease infinite alternate;
+}
+
+
+.description::before {
+    position:   absolute;
+    inset:      0;
+
+    /* Background */
+    border-radius:      var(--roundness);
+    background:         radial-gradient(ellipse, var(--color-secondary), transparent 60%);
+    z-index: - 1;
+
+    animation:  animation-desc-bg 8s ease infinite alternate;
+}
+
+
+/* @todo text-shadow */
+@keyframes animation-desc-bg {
+    0% {
+        opacity: 0%;
+    }
+
+    100% {
+        opacity: 25%;
+    }
+}
+
+
+@keyframes animation-desc-text {
+    0% {
+        text-shadow:    0px 0px 20px var(--color-secondary),
+                        0px 0px 5px var(--color-secondary);
+    }
+
+    100% {
+        text-shadow:    0px 0px 2px var(--color-secondary);
+    }
+}
