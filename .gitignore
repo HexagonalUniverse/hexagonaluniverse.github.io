@@ -19,4 +19,4 @@
 *.so
 *.auto*
 
-
+src/hps/cmake-build
