@@ -1,6 +1,8 @@
 body {
     font-family: Arial;
     background-color: #44484d;
+
+    margin: 40px;
 }
 
 h1 {
@@ -31,5 +33,50 @@ button {
     padding: 20px;
 
     border-radius: 10px;
+}
+
+
+.title {
+    color: #2c3e50;
+    text-align: center;
+}
+
+
+.portrait {
+    width: 200px;
+    border-radius: 50%;
+
+    border: 3px solid #2c3e50;
+    padding: 5px;
+
+    display: block;
+    margin: auto;
+}
+
+#name {
+    text-align: center;
+    font-weight: bold;
+}
+
+
+.subtitle {
+    color: #2c3e50ff;
+}
+
+
+.lista {
+  background-color: #ecf0f1;
+  padding: 15px;
+  border-radius: 8px;
+}
+
+
+.lista li {
+  margin-bottom: 10px;
+}
+
+
+.lista li:hover {
+  color: #d1be91;
 }
 
