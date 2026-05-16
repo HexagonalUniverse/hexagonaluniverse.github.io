@@ -29,121 +29,6 @@ console.log(mod, ptr, size, radial_particle_integrate);
 
 
 
-/**
- *  A particle that orbits around a given center, radius, and angular-speed.
- */
-export class RadialParticle
-{
-    constructor(element,
-                lifespan = 5.0,
-                center_x = 0.0,
-                center_y = 0.0,
-                radius = 1.0,
-                phase = 0.0,
-                angular_speed = 1.0
-                ) {
-
-        this.id = 0;
-
-        const offset = (ptr + Number(size) * this.id) >> 3;
-        mod.HEAPU64[offset] = BigInt(this.id);
-        mod.HEAPF64[offset + 1] = lifespan;
-        mod.HEAPF64[offset + 2] = radius;
-        mod.HEAPF64[offset + 3] = phase;
-        mod.HEAPF64[offset + 4] = angular_speed;
-        mod.HEAPF64[offset + 5] = center_x;
-        mod.HEAPF64[offset + 6] = center_y;
-
-
-        // correspondent HTML element.
-        this.element    = element;
-
-        // position.
-        this.center_x   = center_x;
-        this.center_y   = center_y;
-        this.radius     = radius;
-
-        // angle.
-        this.phase          = phase;
-        this.angular_speed  = angular_speed;
-
-        this.life = lifespan;
-    }
-
-
-    update(delta_time, dx = 0, dy = 0) 
-    {
-        const real_ptr = Number(ptr) + Number(size) * this.id;
-        radial_particle_integrate(real_ptr, delta_time);
-
-        const offset = real_ptr >> 3;
-
-        // retrieving position.
-        const x = mod.HEAPF64[offset + 7];
-        const y = mod.HEAPF64[offset + 8];
-        const orientation_angle = - Math.PI / 2 + Math.atan2(y - this.center_y, x - this.center_x);
-
-        // transforming.
-        this.element.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%) rotate(${orientation_angle}rad)`;
-    }
-
-
-    is_dead() {
-        return this.life <= 0.0;
-    }
-}
-
-
-export class Orbital {
-    constructor() {
-        this.particles  = [];
-        this.running    = false;
-
-        this._loop = this._loop.bind(this);
-    }
-
-
-    add(particle) {
-        this.particles.push(particle);
-    }
-
-
-    start() {
-        if (this.running)
-            return;
-
-        this.running = true;
-        requestAnimationFrame(this._loop);
-    }
-
-
-    stop() {
-        this.running = false;
-    }
-
-    
-    _loop() {
-        if (! this.running)
-            return;
-
-        
-        for (let i = this.particles.length - 1; i >= 0; -- i) {
-            const particle = this.particles[i];
-            
-            particle.update(1 / 60.0);
-
-            if (particle.is_dead()) {
-                particle.element.remove();
-                this.particles.splice(i, 1);
-            }
-        }
-        
-        requestAnimationFrame(this._loop);
-    }
-}
-
-
-
 
 
 
@@ -236,7 +121,7 @@ const ps_particle_offset    = 144;
 
 
 /**
- *  WEBGPU particle system scheduler.
+ *  WEBGPU compute shader particle system scheduler.
  */
 class ParticleSystemScheduler {
     #buffer_length;
@@ -244,8 +129,8 @@ class ParticleSystemScheduler {
     #buffer_size;
 
     /*  Compute pipeline */
-    #adapter;
-    #device;
+    #adapter;   // ref.
+    #device;    // ref.
     #shader;
     #bind_group;
     #pipeline;
@@ -257,25 +142,18 @@ class ParticleSystemScheduler {
     read_buffer;
 
 
-    constructor() {
+    constructor(adapter, device) {
         /*  Constants */
         this.#buffer_length     = 1024;
         this.#data_size         = 144;
         this.#buffer_size       = this.#buffer_length *  this.#data_size;
+
+        this.#adapter           = adapter;
+        this.#device            = device;
     }
 
 
     async create() {
-
-        this.#adapter = await navigator.gpu.requestAdapter();
-        console.log(this.#adapter.limits.maxStorageBufferBindingSize, this.#adapter.limits.maxBufferSize);
-
-        this.#device = await this.#adapter.requestDevice({
-            requiredLimits: {
-                maxStorageBufferBindingSize: this.#adapter.limits.maxStorageBufferBindingSize,
-            }
-        });
-
 
         /*
          *  Creating the buffers.
@@ -316,6 +194,10 @@ class ParticleSystemScheduler {
     }
 
 
+    get_gpu_main_buffer() {
+        return this.#gpu_main_buffer;
+    }
+
     async dispatch(data) {
 
         // measuring performance.
@@ -340,7 +222,7 @@ class ParticleSystemScheduler {
         const pass = encoder.beginComputePass();
         pass.setPipeline(this.#pipeline);
         pass.setBindGroup(0, this.#bind_group);
-        pass.dispatchWorkgroups(Math.ceil(this.#buffer_length / 256));
+        pass.dispatchWorkgroups(Math.ceil(this.#buffer_length / 128));
         pass.end();
 
 
@@ -366,6 +248,14 @@ class ParticleSystemScheduler {
         return this.read_buffer;
     }
 }
+
+
+
+
+
+
+
+
 
 
 function valid_number(number) {
@@ -453,7 +343,574 @@ function parse_space_on_heap(heap, base, src) {
 
 
 
-export class ParticleSystemManager {
+
+
+
+
+
+
+
+
+
+
+
+/*
+ *  Constants
+ */
+
+
+const GLOBAL_SETTINGS_DATA_SIZE     = 32; // [B]
+const EFFECT_CONTROLLER_DATA_SIZE   = 240; // [B]
+const PARTICLE_DATA_SIZE            = 144; // [B]
+
+const CHUNK_LENGTH                  = 128; // [u.]
+const CHUNK_SIZE                    = CHUNK_LENGTH * PARTICLE_DATA_SIZE; // [B]
+const CHUNK_COUNT                   = 32;
+
+
+/**
+ *  Particle system compute processor.
+ *
+ *  @details    WEBGPU compute shader particle system scheduler.
+ */
+class Processor {
+    /*  Compute pipeline */
+
+    #adapter;   // ref.
+    #device;    // ref.
+    #shader;    // owns.
+
+
+    #bind_group;
+    #bind_group_layout;
+    #pipeline_layout;
+    #pipeline_particle;
+    #pipeline_effect;
+
+
+    #chunks_allocated;
+    #currently_allocated;
+
+    #gbuffer_settings;
+    #gbuffer_particles;
+    #gbuffer_effects;
+    #gbuffer_chunk_map;
+
+    read_buffer;
+
+    constructor() {
+        this.#chunks_allocated      = 0;
+        this.#currently_allocated   = 0;
+    }
+
+
+    get_setting_buffer() {
+        return this.#gbuffer_settings;
+    }
+
+    get_particle_buffer() {
+        return this.#gbuffer_particles;
+    }
+
+    get_effect_buffer() {
+        return this.#gbuffer_effects;
+    }
+
+    get_chunk_map_buffer() {
+        return this.#gbuffer_chunk_map;
+    }
+
+
+    _bind() {
+        this.#bind_group = this.#device.createBindGroup({
+            // layout: this.#pipeline_effect.getBindGroupLayout(0),
+            layout: this.#bind_group_layout,
+
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: this.#gbuffer_settings,
+                    },
+                },
+
+                {
+                    binding: 1,
+                    resource: {
+                        buffer: this.#gbuffer_effects,
+                    },
+                },
+                {
+                    binding: 2,
+                    resource: {
+                        buffer: this.#gbuffer_particles,
+                    },
+                },
+                {
+                    binding: 3,
+                    resource: {
+                        buffer: this.#gbuffer_chunk_map,
+                    },
+                },
+            ],
+        });
+
+    }
+
+
+    /**
+     *  Reallocates the particles buffer.
+     *
+     *  @param length The length of the buffer, in units of particles.
+     */
+    _reallocate_particles(length) {
+        if (length < this.#currently_allocated) {
+            return;
+        }
+
+
+        // the chunks are allocated in a exponential manner.
+        const chunks        = Math.ceil(length / CHUNK_LENGTH);
+        const exp2          = Math.ceil(Math.log2(chunks));
+        const to_allocate   = Math.pow(2, exp2) * CHUNK_SIZE; // [B]
+
+
+        if (this.#gbuffer_particles !== undefined) {
+            this.#gbuffer_particles.destroy();
+            console.log("DESTROYED");
+        }
+
+
+        this.#gbuffer_particles = this.#device.createBuffer({
+            size:   to_allocate,
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        });
+
+
+        this.#chunks_allocated      = chunks;
+        this.#currently_allocated   = chunks * CHUNK_LENGTH;
+        console.log("[PROCESSOR] Allocated chunks: " + this.#chunks_allocated + " [u.]",
+            "( " + this.#chunks_allocated + " particles, ",
+            this.#currently_allocated * PARTICLE_DATA_SIZE + " [B])");
+
+        this._bind();
+    }
+
+
+    async create(adapter, device, shader) {
+        this.#adapter           = adapter;
+        this.#device            = device;
+        this.#shader            = shader;
+
+
+        this.#bind_group_layout = this.#device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: "storage" },
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: "storage" },
+                },
+                {
+                    binding: 2,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: "storage" },
+                },
+                {
+                    binding: 3,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: "storage"},
+                },
+            ],
+        });
+
+
+        this.#pipeline_layout = this.#device.createPipelineLayout({
+            bindGroupLayouts: [this.#bind_group_layout],
+        });
+
+
+        this.#pipeline_particle = this.#device.createComputePipeline({
+            layout: this.#pipeline_layout,
+            compute: {
+                module: this.#shader,
+                entryPoint: "particle_update"
+            },
+        });
+
+
+        this.#pipeline_effect = this.#device.createComputePipeline({
+            layout: this.#pipeline_layout,
+            compute: {
+                module: this.#shader,
+                entryPoint: "effect_update",
+            },
+        });
+
+
+        this.#gbuffer_settings = this.#device.createBuffer({
+            size:   GLOBAL_SETTINGS_DATA_SIZE,
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        });
+
+
+        // @TODO currently fixed...
+        this.#gbuffer_effects = this.#device.createBuffer({
+            size:   8 * EFFECT_CONTROLLER_DATA_SIZE,
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        });
+
+
+        this.#gbuffer_chunk_map = this.#device.createBuffer({
+            size:   4 * CHUNK_COUNT,
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        });
+
+
+        this.read_buffer = device.createBuffer({
+            size: 4 * CHUNK_COUNT,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+
+
+        // initially allocating 8 chunks...
+        this._reallocate_particles(CHUNK_COUNT * CHUNK_LENGTH);
+
+
+
+
+        {
+            const EFFECT_COUNT = 4;
+
+            const data = new ArrayBuffer(
+                EFFECT_CONTROLLER_DATA_SIZE * EFFECT_COUNT
+            );
+
+            const u32 = new Uint32Array(data);
+
+            /*
+             *  EffectController layout:
+             *
+             *  +0   N
+             *  +4   a
+             *  +8   b
+             *  +12  c
+             *  +16  emission...
+             *
+             *  192 B stride
+             */
+
+            const STRIDE_U32 = EFFECT_CONTROLLER_DATA_SIZE / 4;
+
+            u32[0 * STRIDE_U32 + 0] = 3;
+            u32[1 * STRIDE_U32 + 0] = 1;
+            u32[2 * STRIDE_U32 + 0] = 3;
+            u32[3 * STRIDE_U32 + 0] = 5;
+
+            u32[0 * STRIDE_U32 + 6] = 1.0;
+            u32[1 * STRIDE_U32 + 6] = 1.0;
+            u32[2 * STRIDE_U32 + 6] = 1.0;
+            u32[3 * STRIDE_U32 + 6] = 1.0;
+
+            device.queue.writeBuffer(
+                this.#gbuffer_effects,
+                0,
+                data
+            );
+        }
+    }
+
+
+    dispatch(command_encoder, count) {
+        if (command_encoder === undefined || command_encoder === null) {
+            return;
+
+        } else if (count === undefined || count === null) { //  || count === 0
+            return;
+
+        }
+
+
+        {   /*
+             *  Global settings
+             */
+
+            const uboDataF32 = new Float32Array(this.#gbuffer_settings.size / 4);
+            const uboDataU32 = new Uint32Array(uboDataF32);
+            //uboDataF32[0] = simulationParams.simulate ? simulationParams.deltaTime : 0.0;
+            //uboDataF32[1] = simulationParams.brightnessFactor;
+
+            // [2] [3] are alignment padding
+            uboDataF32[4] = 0xffffffff * Math.random(); // seed.x
+            uboDataF32[5] = 0xffffffff * Math.random(); // seed.y
+            uboDataF32[6] = 0xffffffff * Math.random(); // seed.z
+            uboDataF32[7] = 0xffffffff * Math.random(); // seed.w
+
+            this.#device.queue.writeBuffer(this.#gbuffer_settings, 0, uboDataF32);
+        }
+
+
+        {
+            const WORKGROUP_SIZE = 128;
+
+            const pass = command_encoder.beginComputePass();
+            pass.setPipeline(this.#pipeline_particle);
+            pass.setBindGroup(0, this.#bind_group);
+
+            pass.dispatchWorkgroups(Math.ceil(CHUNK_COUNT * CHUNK_LENGTH / WORKGROUP_SIZE));
+            pass.end();
+        }
+
+        {
+            // ...
+            const WORKGROUP_SIZE = 128;
+
+            const pass = command_encoder.beginComputePass();
+            pass.setPipeline(this.#pipeline_effect);
+            pass.setBindGroup(0, this.#bind_group);
+
+            pass.dispatchWorkgroups(1);
+            pass.end();
+        }
+
+
+        {
+            command_encoder.copyBufferToBuffer(
+                this.#gbuffer_chunk_map,
+                0,
+                this.read_buffer,
+                0,
+                4 * CHUNK_COUNT
+            );
+        }
+    }
+}
+
+
+class RenderContext {
+
+    #device;
+    #context;
+    #shader;
+
+    #bind_group_layout;
+    #pipeline_layout;
+    #bind_group;
+    #pipeline_render;
+    #pass_descriptor;
+
+
+    constructor(device, context, shader, presentation_format, canvas) {
+        this.#device    = device;
+        this.#context   = context;
+        this.#shader    = shader;
+
+
+        const bind_group_layout = this.#device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: {
+                        type: "read-only-storage",
+                    }
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: {
+                        type: "read-only-storage",
+                    }
+                },
+                {
+                    binding: 2,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: {
+                        type: "read-only-storage",
+                    }
+                },
+                {
+                    binding: 3,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: {
+                        type: "read-only-storage",
+                    }
+                },
+            ],
+        });
+
+
+        const render_pipeline_layout = this.#device.createPipelineLayout({
+            bindGroupLayouts: [bind_group_layout],
+        });
+
+
+        const render_pipeline = this.#device.createRenderPipeline({
+            layout: render_pipeline_layout,
+            // layout: "auto",
+            // device.createPipelineLayout({bindGroupLayouts: [bind_group_layout_render],}),
+
+            primitive: {
+                topology: "triangle-list",
+            },
+
+            vertex: {
+                module: shader,
+            },
+
+            fragment: {
+                module: shader,
+                targets: [
+                    {
+                        format: presentation_format,
+
+                        blend: {
+                            color: {
+                                srcFactor: "src-alpha",
+                                dstFactor: "one",
+                                operation: "add",
+                            },
+
+                            alpha: {
+                                srcFactor: "zero",
+                                dstFactor: "one",
+                                operation: "add",
+                            },
+                        }
+                    },
+                ],
+            },
+
+            depthStencil: {
+                depthWriteEnabled: false,
+                depthCompare: "less",
+                format: "depth24plus",
+            },
+        });
+
+
+        const depth_texture = device.createTexture({
+            size: [canvas.width, canvas.height],
+            format: "depth24plus",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+
+        const render_pass_descriptor = {
+            colorAttachments: [
+                {
+                    view: undefined,
+                    clearValue: [0, 0, 0, 1],
+                    loadOp: "clear",
+                    storeOp: "store",
+                },
+            ],
+
+            depthStencilAttachment: {
+                view: depth_texture.createView(),
+
+                depthClearValue: 1.0,
+                depthLoadOp: "clear",
+                depthStoreOp: "store",
+            },
+        };
+
+
+
+        // setting object's variables...
+        this.#bind_group_layout = bind_group_layout;
+        this.#pipeline_layout = render_pipeline_layout;
+        this.#pipeline_render = render_pipeline;
+        this.#pass_descriptor = render_pass_descriptor;
+    }
+
+
+    bind(
+        gbuffer_settings,
+        gbuffer_effects,
+        gbuffer_particles,
+        gbuffer_chunk_map) {
+        const render_bind_group = this.#device.createBindGroup({
+            layout: this.#bind_group_layout,
+
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: gbuffer_settings,
+                    },
+                },
+                {
+                    binding: 1,
+                    resource: {
+                        buffer: gbuffer_effects,
+                    },
+                },
+                {
+                    binding: 2,
+                    resource: {
+                        buffer: gbuffer_particles,
+                    },
+                },
+                {
+                    binding: 3,
+                    resource: {
+                        buffer: gbuffer_chunk_map,
+                    },
+                },
+            ],
+        });
+
+
+        this.#bind_group = render_bind_group;
+    }
+
+
+    dispatch(command_encoder, count) {
+        if (command_encoder === undefined || command_encoder === null) {
+            return;
+
+        } else if (count === undefined || count === null || count === 0) {
+            return;
+
+        }
+
+
+        const texture_view = this.#context.getCurrentTexture().createView();
+        this.#pass_descriptor.colorAttachments[0].view = texture_view;
+
+        const pass = command_encoder.beginRenderPass(this.#pass_descriptor);
+        pass.setPipeline(this.#pipeline_render);
+        pass.setBindGroup(0, this.#bind_group);
+        // pass.setVertexBuffer(0, particle_buffer);
+        // pass.setVertexBuffer(1, quad_vertex_buffer);
+        //pass.draw(6, NUMBER_OF_PARTICLES, 0, 0);
+
+        /*
+            @TODO   currently we're just rendering triangles...
+
+         */
+        pass.draw(3, count, 0, 0);
+
+
+        // end~
+        pass.end();
+    }
+}
+
+
+/**
+ *  Represents a particle effect, to be used inside the ParticleSystem.
+ *
+ *  API.
+ */
+export class ParticleEffect {
+
+    cfg;
+
 
     /**
      *  Sets JSON configuration into the C-struct.
@@ -462,6 +919,8 @@ export class ParticleSystemManager {
     set(cfg) {
         if (cfg === undefined)
             return;
+
+        console.log(cfg);
 
         const offset = this.ps_ptr >> 2;
 
@@ -523,136 +982,232 @@ export class ParticleSystemManager {
 
 
 
-    constructor() {
-        this.running = false;
-        this._loop = this._loop.bind(this);
-        this.gparticles = [];
-
-
-        hps_init();
-        this.ps_ptr = mod._ps_create();
-        const offset = this.ps_ptr >> 2;
-        mod.HEAPF32[offset + 0] = 0.1;
-        mod.HEAPF32[offset + 1] = 0.0;
-
-        // lifetime.
-        mod.HEAPF32[offset + 2] = 2.0;
-        mod.HEAPF32[offset + 3] = 0.0;
-
-        // size.
-        mod.HEAPF32[offset + 4] = 5.0;
-        mod.HEAPF32[offset + 5] = 10.0;
-
-        // spin.
-        mod.HEAPF32[offset + 6] = 5.0;
-        mod.HEAPF32[offset + 7] = 10.0;
-
-        // color.
-        mod.HEAPF32[offset + 8] = 1.0;
-        mod.HEAPF32[offset + 9] = 1.0;
-        mod.HEAPF32[offset + 10] = 1.0;
-        mod.HEAPF32[offset + 11] = 1.0;
-
-        mod.HEAPF32[offset + 12] = 0.0;
-        mod.HEAPF32[offset + 13] = 0.0;
-        mod.HEAPF32[offset + 14] = 0.0;
-        mod.HEAPF32[offset + 15] = 1.0;
-
-        // pos-space.
-        mod.HEAPF32[offset + 16] = 0.0; mod.HEAPF32[offset + 17] = 0.0;
-        mod.HEAPF32[offset + 18] = 100.0; mod.HEAPF32[offset + 19] = 100.0;
-
-        // vel-space.
-        mod.HEAPF32[offset + 20] = 20.0; mod.HEAPF32[offset + 21] = 20.0;
-        mod.HEAPF32[offset + 22] = 20.0; mod.HEAPF32[offset + 23] = 20.0;
-
-        mod.HEAPF32[offset + 24] = 20.0; mod.HEAPF32[offset + 25] = 20.0;
-        mod.HEAPF32[offset + 26] = 20.0; mod.HEAPF32[offset + 27] = 20.0;
-
-        mod.HEAPF32[offset + 28] = 0.0;
-
-        this.particles_view = new Float32Array(mod.HEAPF32.buffer, this.ps_ptr + ps_particle_offset, buffer_length * (data_size / 4));
+    constructor(cfg) {
+        if (cfg !== undefined) {
+            set(cfg);
+        }
     }
 
 
     async create() {
-        this.pss = new ParticleSystemScheduler();
-        await this.pss.create();
-
-        for (let i = 0; i < buffer_length; ++ i) {
-            var gp = new GraphicalParticle(i, new SvgTriangle());
-            gp.view = new Float32Array(mod.HEAPF32.buffer, this.ps_ptr + ps_particle_offset + data_size * i, data_size / 4);
-            this.gparticles.push(gp);
-        }
-
-
-        const response = await fetch("src/bg-particle-effect.json");
-        this.set(await response.json());
     }
 
 
-    start() {
-        if (this.running)
-            return;
-
-        this.running = true;
-        requestAnimationFrame(this._loop);
-    }
-
-
-    stop() {
-        this.running = false;
-    }
-
-
-    async _loop() {
-        if (! this.running)
-            return;
-
-        update_viewport_size();
-
-
-        // dispatching...
-        //console.log(this.particles_view);
-        const result = await this.pss.dispatch(this.particles_view);
-        //console.log("Gathered: " + result, typeof(result));
-
-
-        // synchronizing...
-        //console.log(result.byteLength, result);
-        this.particles_view.set(result);
-
-
-        const size = mod._ps_size(this.ps_ptr);
-        //console.log(size);
-        for (let i = 0; i < size; ++ i) {
-            const gparticle = this.gparticles[i];
-
-            gparticle.render();
-        }
-
-        for (let i = size; i < buffer_length; ++ i) {
-            this.gparticles[i].element.svg.setAttribute("fill-opacity", `0`);
-        }
+    async animate() {
 
 
         mod._ps_update(this.ps_ptr, 0.016);
         //mod._ps_destroy(ps_ptr);
 
-        requestAnimationFrame(this._loop);
+        // requestAnimationFrame(this._loop);
     }
 }
 
 
+/**
+ *  Particle effects compute & renderer context manager.
+ *
+ *  API.
+ */
+export class ParticleSystem {
 
-async function init() {
-    if (! navigator.gpu) {
-        console.log("WebGPU not supported");
-        return;
+    #adapter;   // owns
+    #device;    // owns
+    #context;   // owns
+
+    #shader;    // owns.
+    #processor; // owns.
+    #renderer;  // owns.
+
+
+    particle_effects;
+
+    presentation_format;
+
+
+    constructor(canvas) {
+        this.particle_effects = [ ];
+        this.canvas = canvas;
     }
 
+    async __retrieve_gpu_context() {
+
+        if (! navigator.gpu) {
+            console.log("WebGPU not supported");
+            return false;
+        }
+
+
+        const adapter = await navigator.gpu?.requestAdapter({
+            featureLevel: "compatibility",
+        });
+
+        console.log(adapter.limits.maxStorageBufferBindingSize, adapter.limits.maxBufferSize);
+
+        const device = await adapter?.requestDevice({
+            requiredLimits: {
+                maxStorageBuffersInVertexStage:     4,
+                maxStorageBufferBindingSize:        adapter.limits.maxStorageBufferBindingSize,
+            }
+        });
+
+        device.addEventListener(
+            "uncapturederror",
+            (event) =>
+            {
+                console.error(event.error);
+            }
+        );
+
+
+        if (! ('gpu' in navigator)) {
+            fail('navigator.gpu is not defined - WebGPU not available in this browser');
+        }
+
+        if (! adapter) {
+            fail("requestAdapter returned null - this sample can't run on this system");
+        }
+
+
+        const context = this.canvas.getContext("webgpu");
+        const device_pixel_ratio = window.devicePixelRatio;
+        this.canvas.width = this.canvas.clientWidth * device_pixel_ratio;
+        this.canvas.height = this.canvas.clientHeight * device_pixel_ratio;
+        this.presentation_format = navigator.gpu.getPreferredCanvasFormat();
+
+        context.configure({
+            device,
+            format: this.presentation_format,
+        });
+
+
+        this.#adapter   = adapter;
+        this.#device    = device;
+        this.#context   = context;
+
+        return true;
+    }
+
+
+    async __allocate_resources() {
+
+        const shader_code = await fetch("src/hps/particles.wgsl").then(r => r.text());
+        this.#shader = this.#device.createShaderModule({
+            code: shader_code
+        });
+
+
+        // @TODO merge
+        const render_shader_code = await fetch("src/hps/render.wgsl").then(r => r.text());
+        const render_shader = this.#device.createShaderModule({
+            code: render_shader_code
+        });
+
+
+
+        this.#renderer  = new RenderContext(this.#device, this.#context, render_shader, this.presentation_format, this.canvas);
+        this.#processor = new Processor();
+        await this.#processor.create(this.#adapter, this.#device, this.#shader);
+
+        this.#renderer.bind(
+            this.#processor.get_setting_buffer(),
+            this.#processor.get_effect_buffer(),
+            this.#processor.get_particle_buffer(),
+            this.#processor.get_chunk_map_buffer()
+        );
+
+        return true;
+    }
+
+
+    /**
+     *  (Attempts to) terminate the two-phase object creation.
+     */
+    async create() {
+        const could_retrieve = await this.__retrieve_gpu_context();
+        if (! could_retrieve)
+            return false;
+
+
+        const could_allocate = await this.__allocate_resources();
+        if (! could_allocate)
+            return false;
+
+
+        for (let pe_index = 0; pe_index < this.particle_effects.length; ++ pe_index) {
+            this.particle_effects[pe_index].create();
+        }
+
+        return true;
+    }
+
+
+    /**
+     *  Computes the a new frame animation.
+     *
+     *  @details    Performs compute and rendering passes.
+     */
+    animate() {
+        //update_viewport_size();
+
+
+        for (let pe_index = 0; pe_index < this.particle_effects.length; ++ pe_index) {
+            this.particle_effects[pe_index].animate();
+        }
+
+
+        const command_encoder = this.#device.createCommandEncoder();
+
+        const number_of_particle_effects = this.particle_effects.length;
+        const dispatch_count = CHUNK_LENGTH * number_of_particle_effects;
+
+
+        // compute-shader.
+        this.#processor.dispatch(command_encoder, dispatch_count);
+
+        // rendering...
+        this.#renderer.dispatch(command_encoder, dispatch_count);
+
+
+        // submitting the workload.
+        this.#device.queue.submit([
+            command_encoder.finish(),
+        ]);
+
+
+        this._test();
+    }
+
+    async _test() {
+        if (this.asd === undefined)
+        {
+            this.asd = 0;
+        }
+
+
+        if (this.asd >= 120) {
+            await this.#processor.read_buffer.mapAsync(GPUMapMode.READ);
+
+
+
+            const data = this.#processor.read_buffer.getMappedRange();
+            const view = new Uint32Array(data.slice(0));
+            console.log(view);
+            this.#processor.read_buffer.unmap();
+            this.asd = 0;
+        }
+
+        this.asd += 1;
+    }
+
+
+
+    add_effect(particle_effect) {
+        this.particle_effects.push(particle_effect);
+    }
+
+
+    get_adapter() { return this.#adapter;   }
+    get_device() {  return this.#device;    }
+    get_context() { return this.#context;   }
 }
-
-
-await init();
-

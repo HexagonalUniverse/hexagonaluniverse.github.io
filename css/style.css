@@ -9,23 +9,24 @@
  *
  */
 
+/*
 @font-face {
-    font-family: "JetBrains Mono";
-    src: url("../assets/fonts/JetBrainsMono-Regular.woff2") format("woff2");
-    font-weight:    400; /* normal */
+    font-family: "Barlow";
+    src: url("../assets/fonts/Barlow/Barlow-Regular.ttf") format("ttf");
+    font-weight:    400;
     font-style:     normal;
     font-display:   swap;
 }
 
 
 @font-face {
-    font-family: "JetBrains Mono";
-    src: url("../assets/fonts/JetBrainsMono-Bold.woff2") format("woff2");
-    font-weight:    700; /* bold */
+    font-family: "Barlow";
+    src: url("../assets/fonts/Barlow/Barlow-Bold.ttf") format("ttf");
+    font-weight:    700;
     font-style:     normal;
     font-display:   swap;
 }
-
+*/
 
 
 /*
@@ -79,7 +80,7 @@ body {
     background-repeat:      no-repeat;
     background-attachment:  fixed;
 
-    font-family:            "JetBrains Mono", monospace;
+    font-family:            "Barlow", monospace;
     margin:                 0px;
 }
 
@@ -379,7 +380,7 @@ button {
 
 
 .title {
-    font-weight:    bold;
+    font-weight:    800;
     font-size:      36px;
 
     margin-bottom:  8px;
@@ -390,7 +391,7 @@ button {
 .subtitle {
     font-size:      16px;
     text-align:     right;
-    font-weight:    bold;
+    font-weight:    light;
     margin-bottom:  8px;
 
     color:          var(--color-primary);
