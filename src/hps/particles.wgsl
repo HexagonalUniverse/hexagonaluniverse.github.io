@@ -36,7 +36,7 @@ struct Particle {
     time_alive      : f32,
     fade            : vec2<f32>,
 
-    asd             : f32,
+    effect_id       : u32,
     asd2            : f32,
 
     prop            : ParticleProperties,
@@ -65,6 +65,11 @@ struct EmissionProperties {
     fade_out        : f32,
     fade_out_var    : f32,
 
+    align_a         : f32,
+    align_b         : f32,
+
+    // 12 x 4 = 48 [B]
+
     from_           : ParticleProperties,
     from_var        : ParticleProperties,
 
@@ -84,44 +89,78 @@ struct EffectController { // @TODO
     c: u32,
 
     emission: EmissionProperties,
-}; // 240 [B]
+}; // 224 + 16 = 240 [B]
+
+
+
+/**
+ *  Global state and settings...
+ */
+struct GlobalSettings {
+    N           : atomic<u32>,
+    a           : f32,
+    b           : f32,
+    c           : f32,
+
+    seed        : vec4<u32>,
+};
+
+const CHUNK_COUNT: u32  = 4u;
+const CHUNK_LENGTH: u32 = 256u;
+const DELTA_TIME: f32   = 1.0 / 60.0;
 
 
 
 /**
  *  ...
  */
-struct GlobalSettings {
-    nada: f32,
-    a: f32,
-    b: f32,
-    c: f32,
-
-    seed: vec4<u32>,
-};
-
-const CHUNK_COUNT: u32  = 32u;
-const CHUNK_LENGTH: u32 = 128u;
-const DELTA_TIME: f32   = 1.0 / 60.0;
-
-
-
 @group(0) @binding(0)
 var <storage, read_write> settings: GlobalSettings;
 
 
+/**
+ *  ...
+ */
 @group(0) @binding(1)
 var<storage, read_write> effects: array<EffectController>;
 
 
+
+/**
+ *  ...
+ */
 @group(0) @binding(2)
 var<storage, read_write> particles: array<Particle>;
 
 
+/**
+ *  ...
+ */
 @group(0) @binding(3)
+var<storage, read_write> particles_2: array<Particle>;
+
+
+/**
+ *  Binary mask that tracks which particles are active.
+ */
+@group(0) @binding(4)
+var <storage, read_write> effective : array<u32>;
+
+
+/**
+ *  ...
+ */
+@group(0) @binding(5)
+var <storage, read_write> offsets : array<u32>;
+
+
+
+/**
+ *  ...
+ */
+// @TODO discontinued...
+@group(0) @binding(6)
 var <storage, read_write> chunk_map: array<u32>;
-
-
 
 
 
@@ -131,8 +170,8 @@ var <storage, read_write> chunk_map: array<u32>;
  *
  */
 
-var <workgroup> t_chunk_offset : array<u32, 128>;
-var <workgroup> t_chunk_count : array<u32, 128>;
+var <workgroup> t_chunk_offset  : array<u32, 128>;
+var <workgroup> t_chunk_count   : array<u32, 128>;
 
 
 /**
@@ -279,15 +318,63 @@ fn random_on_space(space: vec4<f32>) -> vec2f {
 fn emmit(index: u32)
 {
     var emission = effects[index].emission;
-    while (emission.timer > 5.0) {
-        emission.timer -= 5.0;
+
+
+    var N: u32 = atomicLoad(&settings.N);
+    if (N >= CHUNK_LENGTH * CHUNK_COUNT) {
+        return;
+    }
+
+
+    while (emission.timer > emission.period) {
+        let old_N = atomicAdd(&settings.N, 1u);
+        if (old_N >= CHUNK_LENGTH * CHUNK_COUNT) { // @TODO limit.
+            break;
+        }
+
+        emission.timer -= emission.period;
 
         var particle = Particle();
         //particle.pos = random_on_space(emission.pos_space);
         particle.pos = random_on_space(vec4f(- 50.0, - 50.0, 50.0, 50.0));
-        particle.vel = random_on_space(vec4f(- 50.0, - 50.0, 50.0, 50.0));
+        particle.vel = random_on_space(emission.vel_space);
+        particle.acc = random_on_space(emission.acc_space);
 
-        particles[CHUNK_LENGTH * index + effects[index].N] = particle;
+        particle.time_alive = 0.0;
+        //particle.lifespan = random_range(
+        //    emission.lifetime - emission.lifetime_var,
+        //    emission.lifetime + emission.lifetime_var
+        //);
+        particle.lifespan = 5.0;
+
+        //particle.fade.x = random_range(
+        //    emission.fade_in - emission.fade_in_var,
+        //    emission.fade_in + emission.fade_in_var
+        //);
+
+        //particle.fade.y = random_range(
+        //    emission.fade_out - emission.fade_out_var,
+        //    emission.fade_out + emission.fade_out_var
+        //);
+
+        particle.fade.x = 0.25;
+        particle.fade.y = 0.25;
+
+        particle.from_.rgba = emission.from_.rgba;
+        particle.to_.rgba   = emission.to_.rgba;
+
+        particle.from_.size = emission.from_.size;
+        particle.to_.size = emission.to_.size;
+
+        particle.from_.spin = emission.from_.spin;
+        particle.to_.spin = emission.to_.spin;
+
+
+        particle.effect_id = index;
+
+        // adding it...
+
+        particles[old_N] = particle;
         effects[index].N += 1;
     }
 
@@ -309,6 +396,12 @@ fn effect_update(
     init_rand(g_id.x, settings.seed);
 
     map_chunks(index, M);
+
+
+    if (effects[index].a == 0) {
+        return;
+    }
+
     emmit(index);
 }
 
@@ -320,6 +413,139 @@ fn effect_update(
  *  Particles
  *
  */
+
+var <workgroup> local_offsets       : array<u32, 128>;
+var <workgroup> local_effective     : array<u32, 128>;
+
+
+/**
+ *  Blelloch scan alg.
+ *
+ *  @param  index   Particle index.
+ *  @param  N       Number of particles in total...
+ *  Ref.: https://developer.download.nvidia.com/compute/cuda/2_2/sdk/website/projects/scan/doc/scan.pdf
+ */
+fn scan_par_offsets(index: u32, N: u32)
+{
+
+    /*
+     *  Up-sweep
+     */
+
+    // floor of log2, essentially...
+    let l = firstLeadingBit(N);
+
+    for (var e : u32 = 0; e < l; e ++)
+    {   // e: exponent, that leads to the `step`.
+        let step        = 1u << e;
+        let next_step   = step << 1u;
+
+        // for k from 0 to (n - 1) by 2^{e + 1} in parallel do
+        let k = next_step * index;
+        let r = k + next_step - 1;
+
+
+        if (r < N) {
+            local_offsets[r] = local_offsets[k + step - 1] +  local_offsets[r];
+            offsets[r] = offsets[k + step - 1] +  offsets[r];
+        }
+
+        workgroupBarrier(); // sync~
+    }
+
+
+    /*
+     *  Down-sweep
+     */
+
+    if (index == 0) { // only one need to set it...
+        local_offsets[N - 1] = 0;
+        offsets[N - 1] = 0;
+    }
+
+
+    workgroupBarrier(); // sync~
+
+    for (var e : i32 = i32(l) - 1; e >= 0; e --) {
+        let step        = 1u << u32(e);
+        let next_step   = step << 1u;
+
+
+        // for k from 0 to (n - 1) by 2^{e + 1} in parallel do
+        let k = next_step * index;
+        let r = k + next_step - 1;
+
+        if (r < N) {
+            let t = local_offsets[k + step - 1];
+            local_offsets[k + step - 1] = local_offsets[r];
+            local_offsets[r] = t + local_offsets[r];
+
+            let t2 = offsets[k + step - 1];
+            offsets[k + step - 1] = offsets[r];
+            offsets[r] = t + offsets[r];
+        }
+
+        workgroupBarrier(); // sync~
+    }
+}
+
+
+fn scatter_par(index: u32)
+{
+    if (local_effective[index] == 1u) {
+        particles_2[
+            local_offsets[index] - 1u
+        ] = particles[index];
+    }
+}
+
+
+@compute @workgroup_size(128)
+fn par_compact(@builtin(global_invocation_id) global_invocation_id: vec3<u32>)
+{
+    let index: u32      = global_invocation_id.x;
+    let N: u32          = arrayLength(&particles);
+    let valid: bool     = index < N; // tracks if this is a valid thread...
+
+    if (valid) {
+        local_effective[index]      = u32(particles[index].time_alive < particles[index].lifespan);
+        local_offsets[index]        = local_effective[index];
+
+        effective[index]            = u32(particles[index].time_alive < particles[index].lifespan);
+        offsets[index]              = effective[index];
+    }
+
+
+    workgroupBarrier(); // ~sync
+
+    scan_par_offsets(index, N); // (there's sync. there so every thread must go...)
+
+
+    if (valid) {
+        scatter_par(index);
+    }
+
+
+    // copying the buffer over...
+    workgroupBarrier(); // ~sync
+
+
+    if (index == N - 1u) {
+        var compact_count : u32 = local_offsets[N - 1u] + local_effective[N - 1u];
+        atomicStore(&settings.N, compact_count);
+    }
+
+
+    if (valid) {
+        particles[index] = particles_2[index];
+    }
+}
+
+
+
+
+
+
 
 fn clip(x: f32) -> f32 {
     return max(0.0, min(1.0, x));
@@ -372,21 +598,19 @@ fn particle_update(@builtin(global_invocation_id) id: vec3<u32>)
     // indexing.
     let chunk_index     = id.x / CHUNK_LENGTH;
 
-    if ((id.x >= arrayLength(&particles)) || (chunk_index >= CHUNK_COUNT)) {
-        // invalid thread index.
-        return;
-    }
+    //if (id.x >= arrayLength(&particles)) { // ) || (chunk_index >= CHUNK_COUNT)
+    //    // invalid thread index.
+    //    return;
+    //}
 
     let particle_index  = id.x % CHUNK_LENGTH;
     let effect_id       = chunk_map[chunk_index];
 
+
+
+
     if (particle_index >= effects[effect_id].N) {
-        return;
-    }
-
-
-    if (effect_id == 2) {
-        //particles[particle_index].prop.rgba = vec4(1.0, 1.0, 1.0, 1.0);
+        //return;
     }
 
 

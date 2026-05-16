@@ -120,143 +120,6 @@ const buffer_size           = buffer_length * data_size;
 const ps_particle_offset    = 144;
 
 
-/**
- *  WEBGPU compute shader particle system scheduler.
- */
-class ParticleSystemScheduler {
-    #buffer_length;
-    #data_size;
-    #buffer_size;
-
-    /*  Compute pipeline */
-    #adapter;   // ref.
-    #device;    // ref.
-    #shader;
-    #bind_group;
-    #pipeline;
-
-    /*  Buffers */
-    #gpu_main_buffer;
-    #gpu_read_buffer;
-    array_read_buffer;
-    read_buffer;
-
-
-    constructor(adapter, device) {
-        /*  Constants */
-        this.#buffer_length     = 1024;
-        this.#data_size         = 144;
-        this.#buffer_size       = this.#buffer_length *  this.#data_size;
-
-        this.#adapter           = adapter;
-        this.#device            = device;
-    }
-
-
-    async create() {
-
-        /*
-         *  Creating the buffers.
-         */
-
-        this.#gpu_main_buffer = this.#device.createBuffer({
-            size: this.#buffer_size,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
-        });
-
-
-        this.#gpu_read_buffer = this.#device.createBuffer({
-            size: this.#buffer_size,
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-        });
-
-
-
-        /*
-         *  Loading the shader.
-         */
-
-        const shader_code = await fetch("src/hps/particles.wgsl").then(r => r.text());
-        this.#shader = this.#device.createShaderModule({ code: shader_code });
-
-        this.#pipeline = this.#device.createComputePipeline({
-            layout: "auto",
-            compute: { module: this.#shader, entryPoint: "particle_update" }
-        });
-
-        this.#bind_group = this.#device.createBindGroup({
-            layout: this.#pipeline.getBindGroupLayout(0),
-            entries: [{
-                binding: 0,
-                resource: { buffer: this.#gpu_main_buffer }
-            }]
-        });
-    }
-
-
-    get_gpu_main_buffer() {
-        return this.#gpu_main_buffer;
-    }
-
-    async dispatch(data) {
-
-        // measuring performance.
-        const perf_start = performance.now();
-
-
-        if (data !== undefined) {
-            /*
-             *  Submitting data.
-             */
-
-            this.#device.queue.writeBuffer(this.#gpu_main_buffer, 0, data);
-        }
-
-
-        /*
-         *  Compute pipeline
-         */
-
-        const encoder = this.#device.createCommandEncoder();
-
-        const pass = encoder.beginComputePass();
-        pass.setPipeline(this.#pipeline);
-        pass.setBindGroup(0, this.#bind_group);
-        pass.dispatchWorkgroups(Math.ceil(this.#buffer_length / 128));
-        pass.end();
-
-
-        // reading it...
-        this.#gpu_read_buffer.unmap();
-        encoder.copyBufferToBuffer(this.#gpu_main_buffer, 0, this.#gpu_read_buffer, 0, this.#buffer_size);
-
-        // ok.
-        this.#device.queue.submit([encoder.finish()]);
-        //await this.#device.queue.onSubmittedWorkDone();
-
-
-        const perf_end = performance.now();
-        //console.log("TIME:" + (perf_end - perf_start));
-
-
-        // reading buffer in the CPU.
-        await this.#gpu_read_buffer.mapAsync(GPUMapMode.READ);
-
-        this.array_read_buffer      = this.#gpu_read_buffer.getMappedRange();
-        this.read_buffer            = new Float32Array(this.array_read_buffer);
-
-        return this.read_buffer;
-    }
-}
-
-
-
-
-
-
-
-
-
 
 function valid_number(number) {
     return number !== undefined && typeof number === "number";
@@ -363,9 +226,9 @@ const GLOBAL_SETTINGS_DATA_SIZE     = 32; // [B]
 const EFFECT_CONTROLLER_DATA_SIZE   = 240; // [B]
 const PARTICLE_DATA_SIZE            = 144; // [B]
 
-const CHUNK_LENGTH                  = 128; // [u.]
+const CHUNK_LENGTH                  = 256; // [u.]
 const CHUNK_SIZE                    = CHUNK_LENGTH * PARTICLE_DATA_SIZE; // [B]
-const CHUNK_COUNT                   = 32;
+const CHUNK_COUNT                   = 4;
 
 
 /**
@@ -386,6 +249,7 @@ class Processor {
     #pipeline_layout;
     #pipeline_particle;
     #pipeline_effect;
+    #pipeline_compact;
 
 
     #chunks_allocated;
@@ -393,10 +257,14 @@ class Processor {
 
     #gbuffer_settings;
     #gbuffer_particles;
+    #gbuffer_particles_2;
+    #gbuffer_effective;
+    #gbuffer_offsets;
     #gbuffer_effects;
     #gbuffer_chunk_map;
 
     read_buffer;
+    read_buffer_gs;
 
     constructor() {
         this.#chunks_allocated      = 0;
@@ -449,6 +317,24 @@ class Processor {
                 {
                     binding: 3,
                     resource: {
+                        buffer: this.#gbuffer_particles_2,
+                    },
+                },
+                {
+                    binding: 4,
+                    resource: {
+                        buffer: this.#gbuffer_effective,
+                    },
+                },
+                {
+                    binding: 5,
+                    resource: {
+                        buffer: this.#gbuffer_offsets,
+                    },
+                },
+                {
+                    binding: 6,
+                    resource: {
                         buffer: this.#gbuffer_chunk_map,
                     },
                 },
@@ -470,21 +356,45 @@ class Processor {
 
 
         // the chunks are allocated in a exponential manner.
-        const chunks        = Math.ceil(length / CHUNK_LENGTH);
-        const exp2          = Math.ceil(Math.log2(chunks));
-        const to_allocate   = Math.pow(2, exp2) * CHUNK_SIZE; // [B]
+        //const chunks        = Math.ceil(length / CHUNK_LENGTH);
+        const chunks        = CHUNK_COUNT;
+        const log2          = Math.ceil(Math.log2(chunks));
+        const exp2          = Math.pow(2, log2); // [u.]
+        const to_allocate   = exp2 * CHUNK_SIZE; // [B]
 
 
         if (this.#gbuffer_particles !== undefined) {
             this.#gbuffer_particles.destroy();
-            console.log("DESTROYED");
+        }
+
+
+        if (this.#gbuffer_particles_2 !== undefined) {
+            this.#gbuffer_particles_2.destroy();
         }
 
 
         this.#gbuffer_particles = this.#device.createBuffer({
             size:   to_allocate,
-            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
         });
+
+
+        this.#gbuffer_particles_2 = this.#device.createBuffer({
+            size:   to_allocate,
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        });
+
+
+        this.#gbuffer_effective = this.#device.createBuffer({
+            size:   4 * CHUNK_LENGTH * exp2,
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        })
+
+
+        this.#gbuffer_offsets = this.#device.createBuffer({
+            size:   4 * CHUNK_LENGTH * exp2,
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        })
 
 
         this.#chunks_allocated      = chunks;
@@ -525,6 +435,21 @@ class Processor {
                     visibility: GPUShaderStage.COMPUTE,
                     buffer: { type: "storage"},
                 },
+                {
+                    binding: 4,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: "storage"},
+                },
+                {
+                    binding: 5,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: "storage"},
+                },
+                {
+                    binding: 6,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: "storage"},
+                },
             ],
         });
 
@@ -552,6 +477,14 @@ class Processor {
         });
 
 
+        this.#pipeline_compact = this.#device.createComputePipeline({
+            layout: this.#pipeline_layout,
+            compute: {
+                module: this.#shader,
+                entryPoint: "par_compact",
+            },
+        });
+
         this.#gbuffer_settings = this.#device.createBuffer({
             size:   GLOBAL_SETTINGS_DATA_SIZE,
             usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
@@ -572,56 +505,20 @@ class Processor {
 
 
         this.read_buffer = device.createBuffer({
-            size: 4 * CHUNK_COUNT,
+            size: 4 * CHUNK_LENGTH * CHUNK_COUNT,
             usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
 
+        this.read_buffer_gs = device.createBuffer({
+            size:   GLOBAL_SETTINGS_DATA_SIZE,
+            usage:  GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+
+
+
         // initially allocating 8 chunks...
         this._reallocate_particles(CHUNK_COUNT * CHUNK_LENGTH);
-
-
-
-
-        {
-            const EFFECT_COUNT = 4;
-
-            const data = new ArrayBuffer(
-                EFFECT_CONTROLLER_DATA_SIZE * EFFECT_COUNT
-            );
-
-            const u32 = new Uint32Array(data);
-
-            /*
-             *  EffectController layout:
-             *
-             *  +0   N
-             *  +4   a
-             *  +8   b
-             *  +12  c
-             *  +16  emission...
-             *
-             *  192 B stride
-             */
-
-            const STRIDE_U32 = EFFECT_CONTROLLER_DATA_SIZE / 4;
-
-            u32[0 * STRIDE_U32 + 0] = 3;
-            u32[1 * STRIDE_U32 + 0] = 1;
-            u32[2 * STRIDE_U32 + 0] = 3;
-            u32[3 * STRIDE_U32 + 0] = 5;
-
-            u32[0 * STRIDE_U32 + 6] = 1.0;
-            u32[1 * STRIDE_U32 + 6] = 1.0;
-            u32[2 * STRIDE_U32 + 6] = 1.0;
-            u32[3 * STRIDE_U32 + 6] = 1.0;
-
-            device.queue.writeBuffer(
-                this.#gbuffer_effects,
-                0,
-                data
-            );
-        }
     }
 
 
@@ -639,18 +536,20 @@ class Processor {
              *  Global settings
              */
 
-            const uboDataF32 = new Float32Array(this.#gbuffer_settings.size / 4);
+
+            const uboDataF32 = new Float32Array(4);
             const uboDataU32 = new Uint32Array(uboDataF32);
             //uboDataF32[0] = simulationParams.simulate ? simulationParams.deltaTime : 0.0;
             //uboDataF32[1] = simulationParams.brightnessFactor;
 
+''
             // [2] [3] are alignment padding
-            uboDataF32[4] = 0xffffffff * Math.random(); // seed.x
-            uboDataF32[5] = 0xffffffff * Math.random(); // seed.y
-            uboDataF32[6] = 0xffffffff * Math.random(); // seed.z
-            uboDataF32[7] = 0xffffffff * Math.random(); // seed.w
+            uboDataF32[0] = 0xffffffff * Math.random(); // seed.x
+            uboDataF32[1] = 0xffffffff * Math.random(); // seed.y
+            uboDataF32[2] = 0xffffffff * Math.random(); // seed.z
+            uboDataF32[3] = 0xffffffff * Math.random(); // seed.w
 
-            this.#device.queue.writeBuffer(this.#gbuffer_settings, 0, uboDataF32);
+            this.#device.queue.writeBuffer(this.#gbuffer_settings, 4, uboDataF32);
         }
 
 
@@ -664,6 +563,25 @@ class Processor {
             pass.dispatchWorkgroups(Math.ceil(CHUNK_COUNT * CHUNK_LENGTH / WORKGROUP_SIZE));
             pass.end();
         }
+
+
+        if (this.asd123 === undefined)
+            this.asd123 = 0;
+
+        this.asd123 += 1;
+        if (this.asd123 == 120) {
+            this.asd123 = 0;
+
+            const WORKGROUP_SIZE = 128;
+
+            const pass = command_encoder.beginComputePass();
+            pass.setPipeline(this.#pipeline_compact);
+            pass.setBindGroup(0, this.#bind_group);
+
+            pass.dispatchWorkgroups(Math.ceil(CHUNK_COUNT * CHUNK_LENGTH / WORKGROUP_SIZE));
+            pass.end();
+        }
+
 
         {
             // ...
@@ -680,12 +598,24 @@ class Processor {
 
         {
             command_encoder.copyBufferToBuffer(
-                this.#gbuffer_chunk_map,
+                //this.#gbuffer_chunk_map,
+                this.#gbuffer_effects,
                 0,
                 this.read_buffer,
                 0,
-                4 * CHUNK_COUNT
+                //4 * CHUNK_LENGTH * CHUNK_COUNT,
+                EFFECT_CONTROLLER_DATA_SIZE * 2,
             );
+
+
+            command_encoder.copyBufferToBuffer(
+                this.#gbuffer_settings,
+                0,
+                this.read_buffer_gs,
+                0,
+                GLOBAL_SETTINGS_DATA_SIZE,
+            );
+
         }
     }
 }
@@ -910,6 +840,7 @@ class RenderContext {
 export class ParticleEffect {
 
     cfg;
+    #data;
 
 
     /**
@@ -922,84 +853,126 @@ export class ParticleEffect {
 
         console.log(cfg);
 
-        const offset = this.ps_ptr >> 2;
+        // emission offset.
+        const e_offset = 4;
 
 
+
+        this.#data = new ArrayBuffer(
+            EFFECT_CONTROLLER_DATA_SIZE
+        );
+
+        const u32 = new Uint32Array(this.#data);
+        const f32 = new Float32Array(this.#data);
+
+        // field `N`
+        u32[0] = 0;
+
+        // field `a`
+        u32[1] = 1;
+
+        // field `b`
+        u32[2] = 1;
+
+        // field `c`
+        u32[3] = 1;
+
+
+        // field `id`
+        f32[e_offset + 0] = 0;
+
+        // field `flags`
+        f32[e_offset + 1] = 0;
+
+
+        // field `period`
         if (valid_number(cfg["emission-period"]))
-            mod.HEAPF32[offset + 0] = cfg["emission-period"];
+            f32[e_offset + 2] = cfg["emission-period"];
 
         else if (valid_number(cfg["emission-frequency"]))
-            mod.HEAPF32[offset + 0] = 1.0 / cfg["emission-frequency"];
+            f32[e_offset + 2] = 1.0 / cfg["emission-frequency"];
 
 
+        // field `timer`
+        f32[e_offset + 3] = 0.0;
+
+
+        // fields `lifetime`, `lifetime_var`
         if (valid_number(cfg["lifespan"]))
-            mod.HEAPF32[offset + 2] = cfg["lifespan"];
+            f32[e_offset + 4] = cfg["lifespan"];
+        //f32[e_offset + 5] = ...;
 
-
-        if (valid_number(cfg["size"]))
-            mod.HEAPF32[offset + 4] = 5.0;
-
-        else if (valid_tuple(cfg["size"])) {
-            mod.HEAPF32[offset + 4] = cfg["size"][0];
-            mod.HEAPF32[offset + 5] = cfg["size"][1];
-        }
-
-
-        if (valid_number(cfg["spin"]))
-            mod.HEAPF32[offset + 6] = 5.0;
-
-        else if (valid_tuple(cfg["spin"])) {
-            mod.HEAPF32[offset + 6] = cfg["spin"][0];
-            mod.HEAPF32[offset + 7] = cfg["spin"][1];
-        }
-
-
+        // fields `fade_in`, `fade_in_var`, `fade_out`, `fade_out_var`
         if (valid_number(cfg["fade-in"]))
-            mod.HEAPF32[offset + 28] = cfg["fade-in"];
+            f32[e_offset + 6] = cfg["fade-in"];
+
+        f32[e_offset + 7] = 0.0;
 
         if (valid_number(cfg["fade-out"]))
-            mod.HEAPF32[offset + 29] = cfg["fade-out"];
+            f32[e_offset + 8] = cfg["fade-out"];
+
+        f32[e_offset + 9] = 0.0;
+
+        f32[e_offset + 10]    = 0.0;
+        f32[e_offset + 11]    = 0.0;
 
 
+        // `from_`
+        var offset = 16;
         var color = parse_hex_to_f32(cfg["initial-color"]);
-        mod.HEAPF32[offset + 8]     = color[0];
-        mod.HEAPF32[offset + 9]     = color[1];
-        mod.HEAPF32[offset + 10]    = color[2];
-        mod.HEAPF32[offset + 11]    = color[3];
+        console.log("COLOR: " + color);
+
+        f32[offset + 0]     = color[0];
+        f32[offset + 1]     = color[1];
+        f32[offset + 2]     = color[2];
+        f32[offset + 3]     = color[3];
 
 
+        if (valid_number(cfg["size"])) {
+            f32[offset + 4]         = cfg["size"];
+            f32[offset + 4 + 8]     = 0.0;
+        }
+        else if (valid_tuple(cfg["size"])) {
+            f32[offset + 4]         = cfg["size"][0];
+            f32[offset + 4 + 8]     = cfg["size"][1];
+        }
+
+
+        if (valid_number(cfg["spin"])) {
+            f32[offset + 5]         = cfg["spin"];
+            f32[offset + 5 + 8]     = 0.0;
+        }
+        else if (valid_tuple(cfg["spin"])) {
+            f32[offset + 5]         = cfg["spin"][0];
+            f32[offset + 5 + 8]     = cfg["spin"][1];
+        }
+
+
+        offset = 16 + 8 * 2;
         color = parse_hex_to_f32(cfg["target-color"]);
-        mod.HEAPF32[offset + 12]    = color[0];
-        mod.HEAPF32[offset + 13]    = color[1];
-        mod.HEAPF32[offset + 14]    = color[2];
-        mod.HEAPF32[offset + 15]    = color[3];
+        f32[offset + 0]     = color[0];
+        f32[offset + 1]     = color[1];
+        f32[offset + 2]     = color[2];
+        f32[offset + 3]     = color[3];
 
 
-        parse_space_on_heap(mod.HEAPF32, offset + 16, cfg["pos-space"]);
-        parse_space_on_heap(mod.HEAPF32, offset + 20, cfg["vel-space"]);
-        parse_space_on_heap(mod.HEAPF32, offset + 24, cfg["acc-space"]);
+        offset = 16 + 8 * 2 * 2;
+        parse_space_on_heap(f32, offset + 0, cfg["pos-space"]);
+        parse_space_on_heap(f32, offset + 4, cfg["vel-space"]);
+        parse_space_on_heap(f32, offset + 8, cfg["acc-space"]);
+    }
+
+
+    get_data() {
+        return this.#data;
     }
 
 
 
     constructor(cfg) {
         if (cfg !== undefined) {
-            set(cfg);
+            this.set(cfg);
         }
-    }
-
-
-    async create() {
-    }
-
-
-    async animate() {
-
-
-        mod._ps_update(this.ps_ptr, 0.016);
-        //mod._ps_destroy(ps_ptr);
-
-        // requestAnimationFrame(this._loop);
     }
 }
 
@@ -1021,13 +994,15 @@ export class ParticleSystem {
 
 
     particle_effects;
-
     presentation_format;
 
+    status;
 
     constructor(canvas) {
         this.particle_effects = [ ];
         this.canvas = canvas;
+
+        this.status = true;
     }
 
     async __retrieve_gpu_context() {
@@ -1051,13 +1026,16 @@ export class ParticleSystem {
             }
         });
 
-        device.addEventListener(
-            "uncapturederror",
-            (event) =>
-            {
-                console.error(event.error);
+
+        device.addEventListener("uncapturederror", (event) => {
+
+
+            if (this.status) {
+                this.status = false;
+                throw event.error;
             }
-        );
+
+        });
 
 
         if (! ('gpu' in navigator)) {
@@ -1135,7 +1113,13 @@ export class ParticleSystem {
 
 
         for (let pe_index = 0; pe_index < this.particle_effects.length; ++ pe_index) {
-            this.particle_effects[pe_index].create();
+            const data = this.particle_effects[pe_index].get_data();
+
+            this.#device.queue.writeBuffer(
+                this.#processor.get_effect_buffer(),
+                EFFECT_CONTROLLER_DATA_SIZE * pe_index,
+                data,
+            );
         }
 
         return true;
@@ -1150,9 +1134,14 @@ export class ParticleSystem {
     animate() {
         //update_viewport_size();
 
+        if (! this.status) {
+            console.log("B.E. error...");
+            return;
+        }
+
 
         for (let pe_index = 0; pe_index < this.particle_effects.length; ++ pe_index) {
-            this.particle_effects[pe_index].animate();
+            //this.particle_effects[pe_index].animate();
         }
 
 
@@ -1186,14 +1175,24 @@ export class ParticleSystem {
 
 
         if (this.asd >= 120) {
+
+            await this.#device.queue.onSubmittedWorkDone();
+
             await this.#processor.read_buffer.mapAsync(GPUMapMode.READ);
-
-
-
-            const data = this.#processor.read_buffer.getMappedRange();
-            const view = new Uint32Array(data.slice(0));
+            var data = this.#processor.read_buffer.getMappedRange();
+            var view = new Uint32Array(data.slice(0));
             console.log(view);
             this.#processor.read_buffer.unmap();
+
+
+
+            await this.#processor.read_buffer_gs.mapAsync(GPUMapMode.READ);
+            data = this.#processor.read_buffer_gs.getMappedRange();
+            view = new Uint32Array(data.slice(0));
+            console.log("GS:", view);
+            this.#processor.read_buffer_gs.unmap();
+
+
             this.asd = 0;
         }
 
