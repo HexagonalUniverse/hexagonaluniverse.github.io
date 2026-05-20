@@ -117,27 +117,27 @@ if (1) {
 
 
     ps.add_effect(new ParticleEffect({
-        "emission-frequency":   5.0,
+        "emission-frequency":   128.0,
 
-        "lifespan":             5.0,
+        "lifespan":             6.0,
 
         "size":                 [50.0, 20.0],
         "spin":                 [0.0, 1.57],
 
-        "fade-in":              0.250,
-        "fade-out":             0.250,
+        "fade-in":              0.550,
+        "fade-out":             0.550,
 
-        "initial-color":        "#34FA8AFF",
-        "target-color":         "#DA6257FF",
+        "initial-color":        "#34FA8A50",
+        "target-color":         "#2744DA55",
 
         "pos-space": {
-            "min-x": 0.0, "max-x": 100.0,
-            "min-y": 0.0, "max-y": 100.0,
+            "min-x": - 50.0, "max-x": + 50.0,
+            "min-y": - 50.0, "max-y": + 50.0,
         },
 
         "vel-space": {
-            "min-x": -5.0, "max-x": 5.0,
-            "min-y": -5.0, "max-y": 5.0,
+            "min-x": -0.0, "max-x": 0.0,
+            "min-y": -0.0, "max-y": 0.0,
         },
 
         "acc-space": {

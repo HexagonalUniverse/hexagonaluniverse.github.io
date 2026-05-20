@@ -83,7 +83,7 @@ struct EmissionProperties {
 
 
 struct EffectController { // @TODO
-    N: u32,
+    total_N: u32,
     a: u32,
     b: u32,
     c: u32,
@@ -98,15 +98,16 @@ struct EffectController { // @TODO
  */
 struct GlobalSettings {
     N           : atomic<u32>,
-    a           : f32,
+    N2          : u32,
     b           : f32,
     c           : f32,
 
     seed        : vec4<u32>,
 };
 
-const CHUNK_COUNT: u32  = 4u;
-const CHUNK_LENGTH: u32 = 256u;
+const CHUNK_COUNT: u32      = 8u;
+const CHUNK_LENGTH: u32     = 16u;
+const MAX_PARTICLES: u32    = CHUNK_COUNT * CHUNK_LENGTH;
 const DELTA_TIME: f32   = 1.0 / 60.0;
 
 
@@ -260,8 +261,8 @@ fn map_chunks(index: u32, M: u32)
         // aí de fuder...
 
         // array of sizes.
-        t_chunk_count[index]    = effects[index].N;
-        t_chunk_offset[index]   = effects[index].N;
+        t_chunk_count[index]    = effects[index].total_N;
+        t_chunk_offset[index]   = effects[index].total_N;
     }
 
     workgroupBarrier();
@@ -321,14 +322,15 @@ fn emmit(index: u32)
 
 
     var N: u32 = atomicLoad(&settings.N);
-    if (N >= CHUNK_LENGTH * CHUNK_COUNT) {
+    if (N >= MAX_PARTICLES) {
         return;
     }
 
 
     while (emission.timer > emission.period) {
         let old_N = atomicAdd(&settings.N, 1u);
-        if (old_N >= CHUNK_LENGTH * CHUNK_COUNT) { // @TODO limit.
+        if (old_N >= MAX_PARTICLES) { // @TODO limit.
+            atomicSub(&settings.N, 1u);
             break;
         }
 
@@ -336,16 +338,15 @@ fn emmit(index: u32)
 
         var particle = Particle();
         //particle.pos = random_on_space(emission.pos_space);
-        particle.pos = random_on_space(vec4f(- 50.0, - 50.0, 50.0, 50.0));
+        particle.pos = random_on_space(emission.pos_space);
         particle.vel = random_on_space(emission.vel_space);
         particle.acc = random_on_space(emission.acc_space);
 
         particle.time_alive = 0.0;
-        //particle.lifespan = random_range(
-        //    emission.lifetime - emission.lifetime_var,
-        //    emission.lifetime + emission.lifetime_var
-        //);
-        particle.lifespan = 5.0;
+        particle.lifespan = random_range(
+            emission.lifetime - emission.lifetime_var,
+            emission.lifetime + emission.lifetime_var
+        );
 
         //particle.fade.x = random_range(
         //    emission.fade_in - emission.fade_in_var,
@@ -373,9 +374,8 @@ fn emmit(index: u32)
         particle.effect_id = index;
 
         // adding it...
-
         particles[old_N] = particle;
-        effects[index].N += 1;
+        effects[index].total_N += 1;
     }
 
     emission.timer += DELTA_TIME;
@@ -417,15 +417,19 @@ fn effect_update(
 var <workgroup> local_offsets       : array<u32, 128>;
 var <workgroup> local_effective     : array<u32, 128>;
 
+@group(0) @binding(7)
+var <storage, read_write> scan_psum_0: array<u32>;
+
 
 /**
- *  Blelloch scan alg.
+ *  @brief          Blelloch scan alg.
+ *  @details        Intended for just one block (workgroup, i.e, 128 threads~)
  *
- *  @param  index   Particle index.
- *  @param  N       Number of particles in total...
+ *  @param  index   Variable index.
+ *  @param  N       Buffer's size.
  *  Ref.: https://developer.download.nvidia.com/compute/cuda/2_2/sdk/website/projects/scan/doc/scan.pdf
  */
-fn scan_par_offsets(index: u32, N: u32)
+fn scan_block(index: u32, N: u32)
 {
 
     /*
@@ -447,7 +451,6 @@ fn scan_par_offsets(index: u32, N: u32)
 
         if (r < N) {
             local_offsets[r] = local_offsets[k + step - 1] +  local_offsets[r];
-            offsets[r] = offsets[k + step - 1] +  offsets[r];
         }
 
         workgroupBarrier(); // sync~
@@ -460,7 +463,6 @@ fn scan_par_offsets(index: u32, N: u32)
 
     if (index == 0) { // only one need to set it...
         local_offsets[N - 1] = 0;
-        offsets[N - 1] = 0;
     }
 
 
@@ -479,10 +481,6 @@ fn scan_par_offsets(index: u32, N: u32)
             let t = local_offsets[k + step - 1];
             local_offsets[k + step - 1] = local_offsets[r];
             local_offsets[r] = t + local_offsets[r];
-
-            let t2 = offsets[k + step - 1];
-            offsets[k + step - 1] = offsets[r];
-            offsets[r] = t + offsets[r];
         }
 
         workgroupBarrier(); // sync~
@@ -490,39 +488,128 @@ fn scan_par_offsets(index: u32, N: u32)
 }
 
 
-fn scatter_par(index: u32)
+/**
+ *  @brief          Scan~
+ *  @details
+ */
+fn scan(index: u32, N: u32)
 {
-    if (local_effective[index] == 1u) {
+    scan_block(index, N);
+}
+
+
+/**
+ *  ...
+ */
+fn scatter_par(global_index: u32)
+{
+    if (effective[global_index] == 1u) {
         particles_2[
-            local_offsets[index] - 1u
-        ] = particles[index];
+            offsets[global_index]
+        ] = particles[global_index];
     }
 }
 
 
-@compute @workgroup_size(128)
-fn par_compact(@builtin(global_invocation_id) global_invocation_id: vec3<u32>)
-{
-    let index: u32      = global_invocation_id.x;
-    let N: u32          = arrayLength(&particles);
-    let valid: bool     = index < N; // tracks if this is a valid thread...
+const WGROUP_LENGTH: u32 = 16;
 
-    if (valid) {
-        local_effective[index]      = u32(particles[index].time_alive < particles[index].lifespan);
+
+// over particles...
+@compute @workgroup_size(WGROUP_LENGTH)
+fn par_compact_0(
+    @builtin(local_invocation_id)   local_invocation_id: vec3<u32>,
+    @builtin(global_invocation_id)  global_invocation_id: vec3<u32>,
+    @builtin(workgroup_id)          workgroup_id : vec3<u32>
+    )
+{
+    let index           : u32 = local_invocation_id.x;
+    let global_index    : u32 = global_invocation_id.x;
+    let real_N          : u32 = atomicLoad(&settings.N);
+    let really_valid    : bool = global_index < real_N; // tracks if this is a valid thread...
+
+    if (really_valid) {
+        local_effective[index]      = u32(particles[global_index].time_alive < particles[global_index].lifespan);
         local_offsets[index]        = local_effective[index];
 
-        effective[index]            = u32(particles[index].time_alive < particles[index].lifespan);
-        offsets[index]              = effective[index];
+        effective[global_index]     = local_effective[index];
     }
 
 
     workgroupBarrier(); // ~sync
 
-    scan_par_offsets(index, N); // (there's sync. there so every thread must go...)
+    scan_block(index, WGROUP_LENGTH); // (there's sync. there so every thread must go...)
+
+    // collecting the result...
+    offsets[global_index] = local_offsets[index];
 
 
-    if (valid) {
-        scatter_par(index);
+    /*
+     *  Preparing to the 2ND phase.
+     */
+
+    let M: u32 = 1 + (atomicLoad(&settings.N) / WGROUP_LENGTH);
+
+    if (M <= WGROUP_LENGTH) {
+        scan_psum_0[workgroup_id.x] = local_offsets[WGROUP_LENGTH - 1] + local_effective[WGROUP_LENGTH - 1];
+    }
+}
+
+
+// over chunks...
+@compute @workgroup_size(WGROUP_LENGTH)
+fn par_compact_1(
+    @builtin(local_invocation_id)   local_invocation_id: vec3<u32>,
+    @builtin(global_invocation_id)  global_invocation_id: vec3<u32>,
+    @builtin(workgroup_id)          workgroup_id : vec3<u32>
+    )
+{
+    let index           : u32 = local_invocation_id.x;
+    let global_index    : u32 = global_invocation_id.x;
+
+
+    local_effective[index]      = scan_psum_0[global_index];
+    local_offsets[index]        = local_effective[index];
+
+    workgroupBarrier(); // ~sync
+
+    scan_block(index, WGROUP_LENGTH); // (there's sync. there so every thread must go...)
+
+    workgroupBarrier(); // ~sync
+
+    scan_psum_0[global_index] = local_offsets[index];
+}
+
+
+// over particles...
+@compute @workgroup_size(WGROUP_LENGTH)
+fn par_compact_2(
+    @builtin(local_invocation_id)   local_invocation_id: vec3<u32>,
+    @builtin(global_invocation_id)  global_invocation_id: vec3<u32>,
+    @builtin(workgroup_id)          workgroup_id : vec3<u32>
+    )
+{
+    let index           : u32 = local_invocation_id.x;
+    let global_index    : u32 = global_invocation_id.x;
+    let real_N          : u32 = atomicLoad(&settings.N);
+    let really_valid    : bool = global_index < real_N; // tracks if this is a valid thread...
+
+    if (really_valid) {
+        offsets[global_index] += scan_psum_0[workgroup_id.x];
+    }
+
+
+    workgroupBarrier(); // ~sync
+
+    //offsets[global_index] = (1 + offsets[global_index]) * effective[global_index];
+    //offsets[global_index] = (1 + offsets[global_index]) * effective[global_index];
+
+    workgroupBarrier();
+
+    //effective[global_index]     = local_effective[index];
+
+
+    if (really_valid) {
+        scatter_par(global_index);
     }
 
 
@@ -530,14 +617,110 @@ fn par_compact(@builtin(global_invocation_id) global_invocation_id: vec3<u32>)
     workgroupBarrier(); // ~sync
 
 
-    if (index == N - 1u) {
-        var compact_count : u32 = local_offsets[N - 1u] + local_effective[N - 1u];
-        atomicStore(&settings.N, compact_count);
+    let asd = atomicLoad(&settings.N);
+    if (index == (asd - 1u)) {
+        //var compact_count : u32 = offsets[asd - 1u] + effective[asd - 1u];
+        //atomicStore(&settings.N, compact_count);
     }
 
 
-    if (valid) {
-        particles[index] = particles_2[index];
+
+    if (index == 0) {
+        let N2: u32 = atomicLoad(&settings.N);
+        var S: u32 = 0;
+        for (var i: u32 = 0; i < N2; i ++) {
+            S += effective[i];
+        }
+
+        settings.N2 = S;
+        atomicStore(&settings.N, settings.N2);
+    }
+
+
+
+    if (index < settings.N2) {
+        particles[global_index] = particles_2[global_index];
+    } else {
+        particles[global_index] = Particle();
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@compute @workgroup_size(WGROUP_LENGTH)
+fn par_compact(
+    @builtin(local_invocation_id) local_invocation_id: vec3<u32>,
+    @builtin(global_invocation_id) global_invocation_id: vec3<u32>,
+    @builtin(workgroup_id) workgroup_id : vec3<u32>
+    )
+{
+
+    let index           : u32 = local_invocation_id.x;
+    let global_index    : u32 = global_invocation_id.x;
+    let real_N          : u32 = atomicLoad(&settings.N);
+    let really_valid    : bool = global_index < real_N; // tracks if this is a valid thread...
+
+    if (really_valid) {
+        local_effective[index]      = u32(particles[global_index].time_alive < particles[global_index].lifespan);
+        local_offsets[index]        = local_effective[index];
+    }
+
+
+    workgroupBarrier(); // ~sync
+
+    scan_block(index, WGROUP_LENGTH); // (there's sync. there so every thread must go...)
+
+    //
+    let M: u32 = 1 + (atomicLoad(&settings.N) / WGROUP_LENGTH);
+
+    if ((M > 1) && (M <= WGROUP_LENGTH)) {
+        // SCAN 2ND PHASE!
+
+        scan_psum_0[workgroup_id.x] = local_offsets[127] + local_effective[127];
+    }
+    workgroupBarrier();
+
+
+    effective[global_index]     = local_effective[index];
+    offsets[global_index]       = local_offsets[index];
+
+
+    if (really_valid) {
+        scatter_par(global_index);
+    }
+
+
+    // copying the buffer over...
+    workgroupBarrier(); // ~sync
+
+
+    let asd = atomicLoad(&settings.N);
+    if (index == (asd - 1u)) {
+        var compact_count : u32 = offsets[asd - 1u] + effective[asd - 1u];
+        //atomicStore(&settings.N, compact_count);
+    }
+
+
+    if (really_valid) {
+        particles[global_index] = particles_2[global_index];
+    } else {
+        particles[global_index] = Particle();
+    }
+
+
+    if (index == 0) {
+        settings.N2 = atomicLoad(&settings.N);
     }
 }
 
@@ -596,22 +779,21 @@ fn particle_interpolate(particle: ptr<storage, Particle, read_write>)
 fn particle_update(@builtin(global_invocation_id) id: vec3<u32>)
 {
     // indexing.
-    let chunk_index     = id.x / CHUNK_LENGTH;
+    //let chunk_index     = id.x / CHUNK_LENGTH;
 
     //if (id.x >= arrayLength(&particles)) { // ) || (chunk_index >= CHUNK_COUNT)
     //    // invalid thread index.
     //    return;
     //}
 
-    let particle_index  = id.x % CHUNK_LENGTH;
-    let effect_id       = chunk_map[chunk_index];
+    let particle_index = id.x;
+    //let particle_index  = id.x % CHUNK_LENGTH;
+    //let effect_id       = chunk_map[chunk_index];
 
 
 
 
-    if (particle_index >= effects[effect_id].N) {
-        //return;
-    }
+    //if (particle_index >= effects[effect_id].total_N) { return; }
 
 
 

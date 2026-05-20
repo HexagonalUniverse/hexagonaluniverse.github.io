@@ -113,11 +113,6 @@ export class GraphicalParticle {
 
 
 
-/*  Constants */
-const buffer_length         = 1024;
-const data_size             = 144;
-const buffer_size           = buffer_length * data_size;
-const ps_particle_offset    = 144;
 
 
 
@@ -226,9 +221,9 @@ const GLOBAL_SETTINGS_DATA_SIZE     = 32; // [B]
 const EFFECT_CONTROLLER_DATA_SIZE   = 240; // [B]
 const PARTICLE_DATA_SIZE            = 144; // [B]
 
-const CHUNK_LENGTH                  = 256; // [u.]
+const CHUNK_LENGTH                  = 16; // [u.]
 const CHUNK_SIZE                    = CHUNK_LENGTH * PARTICLE_DATA_SIZE; // [B]
-const CHUNK_COUNT                   = 4;
+const CHUNK_COUNT                   = 8;
 
 
 /**
@@ -250,6 +245,9 @@ class Processor {
     #pipeline_particle;
     #pipeline_effect;
     #pipeline_compact;
+    #pipeline_compact_0;
+    #pipeline_compact_1;
+    #pipeline_compact_2;
 
 
     #chunks_allocated;
@@ -262,6 +260,7 @@ class Processor {
     #gbuffer_offsets;
     #gbuffer_effects;
     #gbuffer_chunk_map;
+    #gbuffer_scan_psum_0;
 
     read_buffer;
     read_buffer_gs;
@@ -336,6 +335,12 @@ class Processor {
                     binding: 6,
                     resource: {
                         buffer: this.#gbuffer_chunk_map,
+                    },
+                },
+                {
+                    binding: 7,
+                    resource: {
+                        buffer: this.#gbuffer_scan_psum_0,
                     },
                 },
             ],
@@ -450,6 +455,11 @@ class Processor {
                     visibility: GPUShaderStage.COMPUTE,
                     buffer: { type: "storage"},
                 },
+                {
+                    binding: 7,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: "storage"},
+                },
             ],
         });
 
@@ -485,6 +495,36 @@ class Processor {
             },
         });
 
+
+        this.#pipeline_compact_0 = this.#device.createComputePipeline({
+            layout: this.#pipeline_layout,
+            compute: {
+                module: this.#shader,
+                entryPoint: "par_compact_0",
+            },
+        });
+
+
+        this.#pipeline_compact_1 = this.#device.createComputePipeline({
+            layout: this.#pipeline_layout,
+            compute: {
+                module: this.#shader,
+                entryPoint: "par_compact_1",
+            },
+        });
+
+
+        this.#pipeline_compact_2 = this.#device.createComputePipeline({
+            layout: this.#pipeline_layout,
+            compute: {
+                module: this.#shader,
+                entryPoint: "par_compact_2",
+            },
+        });
+
+
+
+
         this.#gbuffer_settings = this.#device.createBuffer({
             size:   GLOBAL_SETTINGS_DATA_SIZE,
             usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
@@ -515,6 +555,17 @@ class Processor {
             usage:  GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
+
+        this.read_buffer_scan = device.createBuffer({
+            size:   4 * CHUNK_COUNT,
+            usage:  GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+
+
+        this.#gbuffer_scan_psum_0 = device.createBuffer({
+            size:   4 * CHUNK_LENGTH * CHUNK_COUNT / 16, // @TODO 128
+            usage:  GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        });
 
 
         // initially allocating 8 chunks...
@@ -549,7 +600,7 @@ class Processor {
             uboDataF32[2] = 0xffffffff * Math.random(); // seed.z
             uboDataF32[3] = 0xffffffff * Math.random(); // seed.w
 
-            this.#device.queue.writeBuffer(this.#gbuffer_settings, 4, uboDataF32);
+            this.#device.queue.writeBuffer(this.#gbuffer_settings, 4 * 4, uboDataF32);
         }
 
 
@@ -569,17 +620,47 @@ class Processor {
             this.asd123 = 0;
 
         this.asd123 += 1;
-        if (this.asd123 == 120) {
+        if (this.asd123 >= 60 * 2) {
             this.asd123 = 0;
 
-            const WORKGROUP_SIZE = 128;
+            const WORKGROUP_SIZE = 16;
 
-            const pass = command_encoder.beginComputePass();
-            pass.setPipeline(this.#pipeline_compact);
-            pass.setBindGroup(0, this.#bind_group);
+            if (0) {
+                const pass = command_encoder.beginComputePass();
+                pass.setPipeline(this.#pipeline_compact);
+                pass.setBindGroup(0, this.#bind_group);
 
-            pass.dispatchWorkgroups(Math.ceil(CHUNK_COUNT * CHUNK_LENGTH / WORKGROUP_SIZE));
-            pass.end();
+                pass.dispatchWorkgroups(Math.ceil(CHUNK_COUNT * CHUNK_LENGTH / WORKGROUP_SIZE));
+                pass.end();
+
+            } else {
+                // first.
+                var pass = command_encoder.beginComputePass();
+                pass.setPipeline(this.#pipeline_compact_0);
+                pass.setBindGroup(0, this.#bind_group);
+
+                pass.dispatchWorkgroups(Math.ceil(CHUNK_COUNT * CHUNK_LENGTH / WORKGROUP_SIZE));
+                pass.end();
+
+
+                // second.
+                pass = command_encoder.beginComputePass();
+                pass.setPipeline(this.#pipeline_compact_1);
+                pass.setBindGroup(0, this.#bind_group);
+
+                pass.dispatchWorkgroups(Math.ceil(CHUNK_COUNT / WORKGROUP_SIZE)); // LESS WG.!
+                pass.end();
+
+
+                // third.
+                pass = command_encoder.beginComputePass();
+                pass.setPipeline(this.#pipeline_compact_2);
+                pass.setBindGroup(0, this.#bind_group);
+
+                pass.dispatchWorkgroups(Math.ceil(CHUNK_COUNT * CHUNK_LENGTH / WORKGROUP_SIZE));
+                pass.end();
+            }
+
         }
 
 
@@ -599,13 +680,22 @@ class Processor {
         {
             command_encoder.copyBufferToBuffer(
                 //this.#gbuffer_chunk_map,
-                this.#gbuffer_effects,
+                //this.#gbuffer_effective,
+                this.#gbuffer_offsets,
                 0,
                 this.read_buffer,
                 0,
-                //4 * CHUNK_LENGTH * CHUNK_COUNT,
-                EFFECT_CONTROLLER_DATA_SIZE * 2,
+                4 * CHUNK_LENGTH * CHUNK_COUNT,
             );
+
+            command_encoder.copyBufferToBuffer(
+                this.#gbuffer_scan_psum_0,
+                0,
+                this.read_buffer_scan,
+                0,
+                4 * CHUNK_COUNT,
+            );
+
 
 
             command_encoder.copyBufferToBuffer(
@@ -1155,7 +1245,7 @@ export class ParticleSystem {
         this.#processor.dispatch(command_encoder, dispatch_count);
 
         // rendering...
-        this.#renderer.dispatch(command_encoder, dispatch_count);
+        this.#renderer.dispatch(command_encoder, CHUNK_LENGTH * CHUNK_COUNT);
 
 
         // submitting the workload.
@@ -1174,22 +1264,34 @@ export class ParticleSystem {
         }
 
 
-        if (this.asd >= 120) {
+        if (this.asd >= 60) {
 
             await this.#device.queue.onSubmittedWorkDone();
 
             await this.#processor.read_buffer.mapAsync(GPUMapMode.READ);
             var data = this.#processor.read_buffer.getMappedRange();
             var view = new Uint32Array(data.slice(0));
-            console.log(view);
+            //console.log(view);
+
+            for (let i = 0; i < view.length; i += 16) {
+                console.log(...view.slice(i, i + 16));
+            }
+
             this.#processor.read_buffer.unmap();
+
+
+            await this.#processor.read_buffer_scan.mapAsync(GPUMapMode.READ);
+            var data = this.#processor.read_buffer_scan.getMappedRange();
+            var view = new Uint32Array(data.slice(0));
+            console.log("SCAN: " + view);
+            this.#processor.read_buffer_scan.unmap();
 
 
 
             await this.#processor.read_buffer_gs.mapAsync(GPUMapMode.READ);
             data = this.#processor.read_buffer_gs.getMappedRange();
             view = new Uint32Array(data.slice(0));
-            console.log("GS:", view);
+            console.log("GS. N = " + view[0] + " | " + view[1]);
             this.#processor.read_buffer_gs.unmap();
 
 
